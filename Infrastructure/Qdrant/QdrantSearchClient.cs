@@ -1,5 +1,6 @@
 ﻿// Infrastructure/Qdrant/QdrantSearchClient.cs
 using Microsoft.Extensions.Logging;
+using System.Net;
 using System.Net.Http.Json;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -28,22 +29,40 @@ namespace FaceSearch.Infrastructure.Qdrant
             return false;
         }
 
-        public async Task CreateCollectionAsync(CollectionSpec spec, CancellationToken ct = default)
+        public async Task CreateCollectionAsync(string name, int vectorSize, string distance, CancellationToken ct = default)
         {
             var body = new
             {
-                vectors = new { size = spec.Size, distance = spec.Distance }, // "Cosine" | "Dot" | "Euclid"
-                hnsw_config = new { m = 16, ef_construct = 200 },
-                optimizers_config = new { default_segment_number = 2 }
+                vectors = new { size = vectorSize, distance = distance } // e.g., "Cosine"
             };
 
-            var resp = await _http.PutAsJsonAsync($"/collections/{spec.Name}", body, ct);
-            resp.EnsureSuccessStatusCode();
-            _log.LogInformation("Created Qdrant collection {Name}", spec.Name);
+            using var resp = await _http.PutAsJsonAsync($"/collections/{Uri.EscapeDataString(name)}", body, ct);
+
+            // success if created or already exists
+            if (resp.IsSuccessStatusCode || resp.StatusCode == HttpStatusCode.Conflict)
+                return;
+
+            var err = await resp.Content.ReadAsStringAsync(ct);
+            _log?.LogError("Qdrant CreateCollection failed: {Status} {Body}", resp.StatusCode, err);
+            resp.EnsureSuccessStatusCode(); // will throw for other errors
         }
+
+        public async Task EnsureCollectionAsync(string name, int vectorSize, string distance, CancellationToken ct = default)
+        {
+            var check = await _http.GetAsync($"/collections/{Uri.EscapeDataString(name)}", ct);
+            if (check.IsSuccessStatusCode) return;                 // exists
+            if (check.StatusCode != HttpStatusCode.NotFound)       // other error
+            {
+                var txt = await check.Content.ReadAsStringAsync(ct);
+                throw new HttpRequestException($"Qdrant GET collection {name} failed: {(int)check.StatusCode} {txt}");
+            }
+
+            await CreateCollectionAsync(name, vectorSize, distance, ct);  // create if missing
+        }
+
     }
 
-    public sealed record CollectionSpec(string Name, int Size, string Distance);
+    public sealed record CollectionSpec(string Name, int VectorSize, string Distance);
 }
 
 public sealed class QdrantSearchResponse

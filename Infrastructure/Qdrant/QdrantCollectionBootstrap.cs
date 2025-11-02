@@ -31,6 +31,6 @@ public sealed class QdrantCollectionBootstrap
         }
 
         _log.LogInformation("Qdrant collection {Name} missing; creating…", spec.Name);
-        await _client.CreateCollectionAsync(spec, ct);
+        await _client.CreateCollectionAsync(spec.Name, spec.VectorSize, spec.Distance, ct);
     }
 }

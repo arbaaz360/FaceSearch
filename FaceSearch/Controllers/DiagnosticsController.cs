@@ -16,4 +16,6 @@ public class DiagnosticsController : ControllerBase
 
     [HttpGet("selftest")]
     public Task<SelfTestResponse> SelfTest(CancellationToken ct) => _embedder.SelfTestAsync(ct);
+
+
 }

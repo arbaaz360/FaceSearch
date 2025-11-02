@@ -26,32 +26,17 @@ public sealed class MongoContext : IMongoContext
 [BsonIgnoreExtraElements]
 public sealed class ImageDocMongo
 {
-    // Mongo's primary key (_id). Keep separate from your business Id.
     [BsonId]
-    public ObjectId MongoId { get; set; }
-
-    // Business id stored as string field "Id"
-    [BsonElement("Id")]
-    public string Id { get; set; } = default!;
+    [BsonElement("_id")]
+    public string Id { get; set; } = default!;                 // <-- string, not ObjectId
 
     public string AlbumId { get; set; } = default!;
     public string AbsolutePath { get; set; } = default!;
     public string MediaType { get; set; } = "image";
-
-    // Worker uses these
-    public string EmbeddingStatus { get; set; } = "pending";  // pending|done|error
-
-    [BsonDateTimeOptions(Kind = DateTimeKind.Utc)]
+    public string EmbeddingStatus { get; set; } = "pending";    // pending | done | error
     public DateTime CreatedAt { get; set; }
-
-    // --- Optional / nullable fields referenced by repo/worker ---
-    [BsonDateTimeOptions(Kind = DateTimeKind.Utc)]
-    public DateTime? EmbeddedAt { get; set; }   // when embeddings were produced
-
-    public string? Error { get; set; }          // last error (if any)
-
-    public string? SubjectId { get; set; }      // dominant subject/person id (future)
-
-    [BsonDateTimeOptions(Kind = DateTimeKind.Utc)]
-    public DateTime? TakenAt { get; set; }      // EXIF/photo taken timestamp (optional)
+    public DateTime? EmbeddedAt { get; set; }
+    public string? Error { get; set; }
+    public string? SubjectId { get; set; }
+    public DateTime? TakenAt { get; set; }
 }

@@ -1,23 +1,25 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Tasks;
 
-namespace Infrastructure.Embedder
+namespace Infrastructure.Helpers
 {
-    public static class Helpers
+    public static class DeterministicGuid
     {
-        public static string ToDeterministicUuid(this string key)
+        // RFC 4122-ish UUID v5 derived from arbitrary string
+        public static Guid FromString(string input)
         {
-            using var md5 = System.Security.Cryptography.MD5.Create();
-            var bytes = System.Text.Encoding.UTF8.GetBytes(key);
-            var hash = md5.ComputeHash(bytes);
-            // set UUID v3/v5 compatible bits
-            hash[6] = (byte)((hash[6] & 0x0F) | 0x30); // version 3
-            hash[8] = (byte)((hash[8] & 0x3F) | 0x80); // variant RFC 4122
-            var guid = new Guid(hash);
-            return guid.ToString(); // hyphenated string
+            using var sha1 = SHA1.Create();
+            var bytes = sha1.ComputeHash(Encoding.UTF8.GetBytes(input)); // 20 bytes
+
+            // Take first 16 bytes for GUID
+            var guid = new byte[16];
+            Array.Copy(bytes, guid, 16);
+
+            // Set version (5) and variant (RFC 4122)
+            guid[6] = (byte)((guid[6] & 0x0F) | 0x50); // version 5 => upper nibble 0101xxxx
+            guid[8] = (byte)((guid[8] & 0x3F) | 0x80); // variant 10xxxxxx
+
+            return new Guid(guid);
         }
     }
 }

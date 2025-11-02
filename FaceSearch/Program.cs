@@ -4,7 +4,9 @@ using FaceSearch.Infrastructure.Qdrant;
 using FaceSearch.Services.Interfaces;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
-
+using Application.Indexing;
+using FaceSearch.Infrastructure.Indexing;
+using FaceSearch.Infrastructure;
 var builder = WebApplication.CreateBuilder(args);
 
 // ---- strongly-typed options ----
@@ -44,6 +46,11 @@ builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDat
 
 // ---- app services ----
 builder.Services.AddScoped<ISearchService, SearchService>();
+builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(builder.Configuration["Mongo:Connection"] ?? "mongodb://localhost:27017"));
+builder.Services.AddSingleton<IMongoDatabase>(sp =>
+    sp.GetRequiredService<IMongoClient>().GetDatabase(builder.Configuration["Mongo:Database"] ?? "facesearch"));
+builder.Services.AddScoped<ISeedingService, SeedingService>();
+builder.Services.AddInfrastructure();
 
 // ---- web ----
 builder.Services.AddControllers();
@@ -55,13 +62,21 @@ var app = builder.Build();
 app.Logger.LogInformation("Embedder BaseUrl from config: {Base}",
     app.Services.GetRequiredService<EmbedderOptions>().BaseUrl);
 // ---- startup bootstraps ----
+// ---- startup bootstraps ----
 using (var scope = app.Services.CreateScope())
 {
-    var qBoot = scope.ServiceProvider.GetRequiredService<QdrantCollectionBootstrap>();
-    await qBoot.EnsureCollectionsAsync();
+    try
+    {
+        var qBoot = scope.ServiceProvider.GetRequiredService<QdrantCollectionBootstrap>();
+        await qBoot.EnsureCollectionsAsync();
 
-    var mBoot = scope.ServiceProvider.GetRequiredService<MongoBootstrap>();
-    await mBoot.EnsureIndexesAsync();
+        var mBoot = scope.ServiceProvider.GetRequiredService<MongoBootstrap>();
+        await mBoot.EnsureIndexesAsync();
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Bootstrap encountered a non-critical error; continuing startup.");
+    }
 }
 
 if (app.Environment.IsDevelopment())

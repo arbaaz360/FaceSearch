@@ -42,6 +42,28 @@ public sealed class QdrantClient : IQdrantClient
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
     }
+    public async Task<IReadOnlyList<QdrantSearchHit>> SearchHitsAsync(
+    string collection,
+    float[] vector,
+    int limit,
+    string? albumIdFilter = null,
+    string? accountFilter = null,
+    string[]? tagsAnyOf = null,
+    CancellationToken ct = default)
+    {
+        var points = await SearchAsync(collection, vector, limit, albumIdFilter, accountFilter, tagsAnyOf, ct);
+
+        return points.Select(p => new QdrantSearchHit
+        {
+            Id = p.id ?? string.Empty,
+            Score = p.score,
+            Payload = (IReadOnlyDictionary<string, object?>)(p.payload ??
+                       new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase))
+        }).ToList();
+    }
+
+
+
     public async Task<List<QdrantPoint>> SearchAsync(
            string collection,
            float[] vector,
@@ -160,6 +182,7 @@ public sealed class QdrantClient : IQdrantClient
                 continue;
             }
         }
+
     }
 
     private static bool IsTransient(HttpStatusCode status)

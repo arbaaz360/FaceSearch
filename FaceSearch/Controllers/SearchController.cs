@@ -1,12 +1,11 @@
-﻿using FaceSearch.Contracts.Search;
-using FaceSearch.Infrastructure.Qdrant;
-using FaceSearch.Services.Interfaces; // ISearchService, IQdrantClient
+﻿using Contracts.FaceSearch;               // FaceSearchResponse (assumed to have Hits<SearchHit>)
+using Contracts.Search;                   // TextSearch*, ImageSearchResponse, SearchHit
+using FaceSearch.Application.Search;
+using FaceSearch.Infrastructure.Qdrant;   // IQdrantClient, QdrantSearchHit
+using FaceSearch.Mappers;
 using Microsoft.AspNetCore.Mvc;
-using System.Collections.ObjectModel;
-using System.Net;
-using ContractHit = FaceSearch.Contracts.Search.SearchHit;
-using QPoint = FaceSearch.Infrastructure.Qdrant.QdrantPoint;
-using System.Collections.ObjectModel; // for ReadOnlyDictionary<,>
+using Microsoft.Extensions.Configuration;
+using System.Text.Json;
 
 namespace FaceSearch.Api.Controllers;
 
@@ -25,7 +24,7 @@ public sealed class SearchController : ControllerBase
         _cfg = cfg;
     }
 
-    // ---- TEXT ---------------------------------------------------------------
+    // ------------------------------ TEXT ------------------------------------
 
     [HttpPost("text")]
     public async Task<ActionResult<TextSearchResponse>> Text(
@@ -35,59 +34,36 @@ public sealed class SearchController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Query))
             return BadRequest("Query required");
 
-        var topK = Math.Clamp(request.TopK <= 0 ? 30 : request.TopK, 1, 200);
-        var minScore = request.MinScore is > 0 and <= 1 ? request.MinScore.Value : (float?)null;
-
-        try
+        var normalized = new TextSearchRequest
         {
-            var vector = await _search.GetClipForTextAsync(request.Query, ct);
+            Query = request.Query,
+            TopK = Math.Clamp(request.TopK <= 0 ? 30 : request.TopK, 1, 200),
+            MinScore = (request.MinScore is > 0 and <= 1) ? request.MinScore : null,
+            AlbumId = request.AlbumId
+        };
 
-            var clipCollection = _cfg.GetSection("Qdrant")["ClipCollection"] ?? "clip_512";
-            var hits = await _qdrant.SearchAsync(
-                collection: clipCollection,
-                vector: vector,
-                limit: topK,
-                albumIdFilter: request.AlbumId,
-                accountFilter: request.Account,
-                tagsAnyOf: request.Tags,
-                ct: ct);
-
-            var resp = new TextSearchResponse
-            {
-                Hits = hits
-          .Where(h => minScore is null || h.score >= minScore)
-          .Select(ToSearchHit)
-          .ToArray()
-            };
-
-
-            return Ok(resp);
-        }
-        catch (OperationCanceledException) { return NoContent(); }
-        catch (Exception ex)
-        {
-            return Problem(title: "Search failed", detail: ex.Message, statusCode: 500);
-        }
+        var resp = await _search.TextSearchAsync(normalized, ct);
+        return Ok(resp);
     }
 
-    // ---- IMAGE (CLIP image embedding) --------------------------------------
+    // ------------------------------ IMAGE (CLIP) -----------------------------
 
     [HttpPost("image")]
     [RequestSizeLimit(50_000_000)]
     public async Task<ActionResult<ImageSearchResponse>> Image(
-    [FromForm] IFormFile file,
-    [FromQuery] int topK = 30,
-    [FromQuery] string? albumId = null,
-    [FromQuery] string? account = null,
-    [FromQuery] string[]? tags = null,
-    [FromQuery] float? minScore = null,
-    CancellationToken ct = default)
+        [FromForm] IFormFile file,
+        [FromQuery] int topK = 30,
+        [FromQuery] string? albumId = null,
+        [FromQuery] string? account = null,
+        [FromQuery] string[]? tags = null,
+        [FromQuery] float? minScore = null,
+        CancellationToken ct = default)
     {
         if (file is null || file.Length == 0)
             return BadRequest("Image file is required");
 
         topK = Math.Clamp(topK <= 0 ? 30 : topK, 1, 200);
-        minScore = minScore is > 0 and <= 1 ? minScore : null;
+        minScore = (minScore is > 0 and <= 1) ? minScore : null;
 
         try
         {
@@ -95,7 +71,8 @@ public sealed class SearchController : ControllerBase
             var vector = await _search.GetClipForImageAsync(stream, file.FileName, ct);
 
             var clipCollection = _cfg.GetSection("Qdrant")["ClipCollection"] ?? "clip_512";
-            var hits = await _qdrant.SearchAsync(
+
+            var hits = await _qdrant.SearchHitsAsync(
                 collection: clipCollection,
                 vector: vector,
                 limit: topK,
@@ -104,13 +81,12 @@ public sealed class SearchController : ControllerBase
                 tagsAnyOf: tags,
                 ct: ct);
 
-         
             var resp = new ImageSearchResponse
             {
                 Hits = hits
-        .Where(h => minScore is null || h.score >= minScore)
-        .Select(ToSearchHit)
-        .ToArray()
+                    .Where(h => minScore is null || h.Score >= minScore.Value)
+                    .Select(QdrantToModelMapperHit.ToSearchHit)
+                    .ToArray()
             };
             return Ok(resp);
         }
@@ -121,8 +97,8 @@ public sealed class SearchController : ControllerBase
         }
     }
 
+    // ------------------------------ FACE (InsightFace) -----------------------
 
-    // ---- FACE (InsightFace embedding) --------------------------------------
     [HttpPost("face")]
     [RequestSizeLimit(50_000_000)]
     public async Task<ActionResult<FaceSearchResponse>> Face(
@@ -134,11 +110,11 @@ public sealed class SearchController : ControllerBase
     [FromQuery] float? minScore = null,
     CancellationToken ct = default)
     {
-        if (file is null || file.Length == 0)
+        if (file is null or { Length: 0 })
             return BadRequest("Image file is required");
 
         topK = Math.Clamp(topK <= 0 ? 30 : topK, 1, 200);
-        minScore = minScore is > 0 and <= 1 ? minScore : null;
+        minScore = (minScore is > 0 and <= 1) ? minScore : null;
 
         try
         {
@@ -146,7 +122,7 @@ public sealed class SearchController : ControllerBase
             var faceVec = await _search.GetFaceAsync(stream, file.FileName, ct);
 
             var faceCollection = _cfg.GetSection("Qdrant")["FaceCollection"] ?? "faces_arcface_512";
-            var hits = await _qdrant.SearchAsync(
+            var hits = await _qdrant.SearchHitsAsync(
                 collection: faceCollection,
                 vector: faceVec,
                 limit: topK,
@@ -155,14 +131,25 @@ public sealed class SearchController : ControllerBase
                 tagsAnyOf: tags,
                 ct: ct);
 
-          
+            // local helper (in scope for this action)
+            static string? S(IReadOnlyDictionary<string, object?> p, string key)
+                => p.TryGetValue(key, out var v) && v is not null ? v.ToString() : null;
+
             var resp = new FaceSearchResponse
             {
-                Hits = hits
-        .Where(h => minScore is null || h.score >= minScore)
-        .Select(ToSearchHit)
-        .ToArray()
+                Results = hits
+                    .Where(h => minScore is null || h.Score >= minScore.Value)
+                    .Select(h => new FaceSearchHit
+                    {
+                        ImageId = S(h.Payload, "ImageId") ?? "",
+                        AlbumId = S(h.Payload, "AlbumId"),
+                        AbsolutePath = S(h.Payload, "AbsolutePath") ?? "",
+                        SubjectId = S(h.Payload, "SubjectId"),
+                        Score = h.Score
+                    })
+                    .ToArray()
             };
+
             return Ok(resp);
         }
         catch (OperationCanceledException) { return NoContent(); }
@@ -173,34 +160,6 @@ public sealed class SearchController : ControllerBase
     }
 
 
-    // ---- helper -------------------------------------------------------------
-
-    // mapper must return the contracts type
-    private static ContractHit ToSearchHit(QPoint h)
-    {
-        var dict = (h.payload ?? new Dictionary<string, object>())
-            .ToDictionary(kv => kv.Key, kv => (object?)kv.Value, StringComparer.OrdinalIgnoreCase);
-
-        string? Get(params string[] keys) =>
-            keys.Select(k => dict.TryGetValue(k, out var v) ? v?.ToString() : null)
-                .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
-
-        return new ContractHit
-        {
-            Id = h.id,
-            Score = h.score,
-            AlbumId = Get("album_id", "albumId"),
-            Payload = new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(dict),
-
-            // Uncomment if your DTO includes these fields
-            // ImageId   = Get("image_id", "imageId"),
-            // Account   = Get("account"),
-            // Path      = Get("path"),
-            // Timestamp = long.TryParse(Get("ts"), out var ts) ? ts : (long?)null,
-        };
-    }
-
-
-
+    
 
 }

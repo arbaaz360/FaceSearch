@@ -1,26 +1,96 @@
-# IDE / tooling
+# ======================================
+# IDEs / Tooling
+# ======================================
 .vs/
 .idea/
 *.user
 *.suo
 
-# Build outputs
+# Visual Studio Code
+.vscode/
+
+# JetBrains
+*.iml
+
+# ======================================
+# Build outputs (.NET)
+# ======================================
 **/bin/
 **/obj/
 **/Debug/
 **/Release/
+**/publish/
+**/out/
 
-# Python venv & caches
+# ======================================
+# Python virtual environments & caches
+# ======================================
 embedder/.venv/
+.venv/
+venv/
+env/
+ENV/
 **/__pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.pdb
 
-# Local data / volumes
+# ======================================
+# Machine learning / runtime artifacts
+# ======================================
+# Local models or downloaded weights
+**/checkpoints/
+**/models/
+**/weights/
+**/cache/
+**/runs/
+**/output/
+**/outputs/
+**/logs/
+
+# ======================================
+# Docker volumes / runtime data
+# ======================================
 mongo_data/
 qdrant_storage/
 docker-data/
-**/logs/
+**/tmp/
+**/temp/
+**/runtime/
+**/uploads/
 
+# ======================================
 # OS junk
+# ======================================
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Icon?
+desktop.ini
+
+# ======================================
+# Node / web (if used later)
+# ======================================
+node_modules/
+npm-debug.log
+yarn-error.log
+dist/
+build/
+
+# ======================================
+# Large / unnecessary internal folders
+# ======================================
+# Keep these OUT of Git — they cause >100 MB repo bloat
+embedder/.venv/
+embedder/.env/
+embedder/.pytest_cache/
+embedder/__pycache__/
+embedder/Lib/
+embedder/Include/
+embedder/Scripts/
+embedder/share/
+embedder/etc/
+embedder/torch/
+embedder/onnxruntime/
+embedder/cv2/

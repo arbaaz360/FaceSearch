@@ -1,80 +1,76 @@
-﻿using FaceSearch.Application.Search;
+﻿using Application.Albums;
+using Application.Indexing;
+using FaceSearch.Application.Search;
+using FaceSearch.Infrastructure;
 using FaceSearch.Infrastructure.Embedder;
+using FaceSearch.Infrastructure.Indexing;
+using FaceSearch.Infrastructure.Persistence.Mongo;
+using FaceSearch.Infrastructure.Persistence.Mongo.Repositories;
 using FaceSearch.Infrastructure.Qdrant;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
-using Application.Indexing;
-using FaceSearch.Infrastructure.Indexing;
-using FaceSearch.Infrastructure;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// ---- strongly-typed options ----
+// ---------- Options ----------
 builder.Services.Configure<QdrantOptions>(builder.Configuration.GetSection("Qdrant"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<QdrantOptions>>().Value);
 
-// (EmbedderOptions is registered inside AddEmbedderClient)
 builder.Services.AddEmbedderClient(opt =>
     builder.Configuration.GetSection("Embedder").Bind(opt));
 
-// ---- config fallbacks ----
+builder.Services.Configure<MongoOptions>(builder.Configuration.GetSection("Mongo"));
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<MongoOptions>>().Value);
+
+// ---------- HTTP clients ----------
 var qdrantBase = builder.Configuration.GetValue<string>("Qdrant:BaseUrl") ?? "http://localhost:6333";
-var mongoConn = builder.Configuration.GetValue<string>("Mongo:ConnectionString") ?? "mongodb://localhost:27017";
-var mongoDb = builder.Configuration.GetValue<string>("Mongo:Database") ?? "facesearch";
+builder.Services.AddHttpClient<IQdrantClient, QdrantClient>(c => c.BaseAddress = new Uri(qdrantBase));
+builder.Services.AddHttpClient<QdrantSearchClient>(c => c.BaseAddress = new Uri(qdrantBase));
+builder.Services.AddHttpClient<IQdrantUpsert, QdrantUpsert>(c => c.BaseAddress = new Uri(qdrantBase));
 
+// ---------- Mongo (Context + Db projection) ----------
+builder.Services.AddSingleton<IMongoContext, MongoContext>();                           // <— provides Db + collections
+builder.Services.AddSingleton<IMongoDatabase>(sp => sp.GetRequiredService<IMongoContext>().Db);
 
-// ---- HTTP clients ----
-builder.Services.AddHttpClient<IQdrantClient, QdrantClient>(c =>
-{
-    c.BaseAddress = new Uri(qdrantBase);
-});
-builder.Services.AddHttpClient<QdrantSearchClient>(c =>
-{
-    c.BaseAddress = new Uri(qdrantBase);
-});
-builder.Services.AddHttpClient<IQdrantUpsert, QdrantUpsert>(c =>        // <-- add this
-{
-    c.BaseAddress = new Uri(qdrantBase);
-});
+// ✅ Remove BOTH of these duplicates (they’re no longer needed):
+// builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(...));
+// builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(...));
 
-// ---- bootstraps / mongo ----
+// ---------- Bootstraps ----------
 builder.Services.AddSingleton<QdrantCollectionBootstrap>();
 builder.Services.AddSingleton<MongoBootstrap>();
 
-builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoConn));
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoDb));
-
-// ---- app services ----
+// ---------- App services / repos ----------
 builder.Services.AddScoped<ISearchService, SearchService>();
-builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(builder.Configuration["Mongo:Connection"] ?? "mongodb://localhost:27017"));
-builder.Services.AddSingleton<IMongoDatabase>(sp =>
-    sp.GetRequiredService<IMongoClient>().GetDatabase(builder.Configuration["Mongo:Database"] ?? "facesearch"));
 builder.Services.AddScoped<ISeedingService, SeedingService>();
-builder.Services.AddInfrastructure();
 
-// ---- web ----
+builder.Services.AddScoped<IImageRepository, ImageRepository>();
+builder.Services.AddScoped<IAlbumRepository, AlbumRepository>();
+builder.Services.AddScoped<IAlbumClusterRepository, AlbumClusterRepository>();
+builder.Services.AddScoped<IReviewRepository, ReviewRepository>();
+builder.Services.AddScoped<AlbumDominanceService>();
+
+// ---------- Web ----------
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Logging.AddConsole();
 
 var app = builder.Build();
-app.Logger.LogInformation("Embedder BaseUrl from config: {Base}",
-    app.Services.GetRequiredService<EmbedderOptions>().BaseUrl);
-// ---- startup bootstraps ----
-// ---- startup bootstraps ----
+
+app.Logger.LogInformation("Embedder BaseUrl: {Base}", app.Services.GetRequiredService<EmbedderOptions>().BaseUrl);
+
+// ---------- Startup bootstraps ----------
 using (var scope = app.Services.CreateScope())
 {
     try
     {
-        var qBoot = scope.ServiceProvider.GetRequiredService<QdrantCollectionBootstrap>();
-        await qBoot.EnsureCollectionsAsync();
-
-        var mBoot = scope.ServiceProvider.GetRequiredService<MongoBootstrap>();
-        await mBoot.EnsureIndexesAsync();
+        await scope.ServiceProvider.GetRequiredService<QdrantCollectionBootstrap>().EnsureCollectionsAsync();
+        await scope.ServiceProvider.GetRequiredService<MongoBootstrap>().EnsureIndexesAsync();
     }
     catch (Exception ex)
     {
-        app.Logger.LogWarning(ex, "Bootstrap encountered a non-critical error; continuing startup.");
+        app.Logger.LogWarning(ex, "Bootstrap warning; continuing startup.");
     }
 }
 

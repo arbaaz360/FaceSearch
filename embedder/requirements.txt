@@ -1,0 +1,16 @@
+fastapi==0.120.4
+uvicorn==0.38.0
+python-multipart==0.0.20
+
+# Keep these pins — they match what you already ran successfully
+numpy==2.2.6
+Pillow==12.0.0
+opencv-python==4.12.0.88
+
+# Models
+transformers==4.57.1
+open_clip_torch==2.26.1
+insightface==0.7.3
+
+# ONNX Runtime (CUDA for InsightFace). We install this in start.bat to ensure the right variant.
+# onnxruntime-gpu==1.20.0  (installed by start.bat)

@@ -21,5 +21,8 @@
 		<ProjectReference Include="..\Infrastructure\Infrastructure.csproj" />
 		<ProjectReference Include="..\Contracts\Contracts.csproj" />
 	</ItemGroup>
+	<ItemGroup>
+	  <Folder Include="Services\Interfaces\" />
+	</ItemGroup>
 
 </Project>

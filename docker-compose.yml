@@ -1,10 +1,25 @@
 version: "3.8"
 
 services:
+  # --- QDRANT (unchanged) ---
   qdrant:
     image: qdrant/qdrant:v1.10.0
-    container_name: qdrant
+    container_name: facesearch-qdrant
+    restart: unless-stopped
     ports:
       - "6333:6333"
     volumes:
+      # keep or change; relative to this file’s folder
       - ./qdrant_storage:/qdrant/storage
+
+  # --- MONGODB ---
+  mongo:
+    image: mongo:6-jammy
+    container_name: facesearch-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      # Use an ABSOLUTE Windows path to avoid bind-mount quirks.
+      # Create this folder once if it doesn't exist.
+      - "C:/data/facesearch-mongo:/data/db"

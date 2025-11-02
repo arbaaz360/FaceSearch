@@ -2,7 +2,6 @@
 using FaceSearch.Infrastructure.Embedder;
 using FaceSearch.Infrastructure.Qdrant;
 using FaceSearch.Mappers;
-using FaceSearch.Services.Interfaces;
 using Infrastructure.Qdrant;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;

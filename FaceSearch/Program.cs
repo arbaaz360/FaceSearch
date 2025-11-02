@@ -1,7 +1,6 @@
 ﻿using FaceSearch.Application.Search;
 using FaceSearch.Infrastructure.Embedder;
 using FaceSearch.Infrastructure.Qdrant;
-using FaceSearch.Services.Interfaces;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using Application.Indexing;

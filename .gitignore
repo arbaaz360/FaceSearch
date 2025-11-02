@@ -5,11 +5,7 @@
 .idea/
 *.user
 *.suo
-
-# Visual Studio Code
 .vscode/
-
-# JetBrains
 *.iml
 
 # ======================================
@@ -23,7 +19,7 @@
 **/out/
 
 # ======================================
-# Python virtual environments & caches
+# Python environments / caches
 # ======================================
 embedder/.venv/
 .venv/
@@ -35,11 +31,26 @@ ENV/
 *.pyo
 *.pyd
 *.pdb
+*.egg-info/
+.eggs/
+.pytest_cache/
+
+# ======================================
+# Compiled / generated binaries
+# ======================================
+*.dll
+*.lib
+*.so
+*.dylib
+*.exe
+*.pyd
+*.a
+*.o
+*.obj
 
 # ======================================
 # Machine learning / runtime artifacts
 # ======================================
-# Local models or downloaded weights
 **/checkpoints/
 **/models/
 **/weights/
@@ -48,17 +59,23 @@ ENV/
 **/output/
 **/outputs/
 **/logs/
-
-# ======================================
-# Docker volumes / runtime data
-# ======================================
-mongo_data/
-qdrant_storage/
-docker-data/
 **/tmp/
 **/temp/
 **/runtime/
 **/uploads/
+**/datasets/
+**/notebooks/
+**/experiments/
+
+# ======================================
+# Docker / local data volumes
+# ======================================
+mongo_data/
+qdrant_storage/
+docker-data/
+volumes/
+**/db/
+**/storage/
 
 # ======================================
 # OS junk
@@ -70,7 +87,7 @@ Icon?
 desktop.ini
 
 # ======================================
-# Node / web (if used later)
+# Node / web (if used)
 # ======================================
 node_modules/
 npm-debug.log
@@ -94,3 +111,11 @@ embedder/etc/
 embedder/torch/
 embedder/onnxruntime/
 embedder/cv2/
+
+# ======================================
+# Other
+# ======================================
+*.log
+*.lock
+*.bak
+*.swp

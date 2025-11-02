@@ -1,16 +1,26 @@
-# Visual Studio
+# IDE / tooling
 .vs/
+.idea/
 *.user
 *.suo
 
 # Build outputs
-bin/
-obj/
+**/bin/
+**/obj/
+**/Debug/
+**/Release/
 
-# OS / misc
-Thumbs.db
-*.log
+# Python venv & caches
+embedder/.venv/
+**/__pycache__/
+*.pyc
 
-# Local dev data
+# Local data / volumes
 mongo_data/
 qdrant_storage/
+docker-data/
+**/logs/
+
+# OS junk
+.DS_Store
+Thumbs.db

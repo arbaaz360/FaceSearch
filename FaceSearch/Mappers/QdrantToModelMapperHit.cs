@@ -42,7 +42,7 @@ namespace FaceSearch.Mappers
                 ImageId = GetString(p, "imageId", "ImageId", "image_id") ?? "",
                 AlbumId = GetString(p, "albumId", "AlbumId", "album_id"),
                 // your payload’s full path is under "path"
-                AbsolutePath = GetString(p, "path", "absolutePath", "AbsolutePath", "absolute_path") ?? "",
+                AbsolutePath = GetString(p, "absolutePath", "path", "AbsolutePath", "Path") ?? "",
                 SubjectId = GetString(p, "subjectId", "SubjectId", "subject_id"),
                 PreviewUrl = GetString(p, "previewUrl", "PreviewUrl", "preview_url"),
                 Score = h.Score

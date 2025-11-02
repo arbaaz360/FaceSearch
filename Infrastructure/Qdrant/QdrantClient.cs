@@ -7,6 +7,8 @@ using System.Text;
 using System.Text.Json;
 
 namespace FaceSearch.Infrastructure.Qdrant;
+
+
 public sealed class QdrantSearchResponse
 {
     public List<QdrantPoint> result { get; init; } = new();
@@ -77,7 +79,8 @@ public sealed class QdrantClient : IQdrantClient
         var must = new List<object>();
 
         if (!string.IsNullOrWhiteSpace(albumIdFilter))
-            must.Add(new { key = "album_id", match = new { value = albumIdFilter } });
+            must.Add(new { key = "albumId", match = new { value = albumIdFilter } });
+
 
         if (!string.IsNullOrWhiteSpace(accountFilter))
             must.Add(new { key = "account", match = new { value = accountFilter } });
@@ -92,9 +95,10 @@ public sealed class QdrantClient : IQdrantClient
             vector,
             limit,
             with_payload = true,
-            with_vector = false,
+            with_vectors = false,
             filter
         };
+
 
         var resp = await _http.PostAsJsonAsync($"/collections/{collection}/points/search", body, ct);
         resp.EnsureSuccessStatusCode();

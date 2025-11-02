@@ -1,9 +1,8 @@
 ﻿using FaceSearch.Infrastructure.Embedder;
 using FaceSearch.Infrastructure.Persistence.Mongo;
 using FaceSearch.Infrastructure.Qdrant;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 
 namespace FaceSearch.Workers.Indexer;
 
@@ -13,7 +12,7 @@ public sealed class IndexerWorker : BackgroundService
     private readonly IImageRepository _images;
     private readonly IEmbedderClient _embedder;
     private readonly IQdrantUpsert _upsert;
-    private readonly IQdrantClient _qdrant; // kept for future diagnostics if needed
+    private readonly IQdrantClient _qdrant; // kept for diagnostics if needed
     private readonly QdrantOptions _qopts;
     private readonly IndexerOptions _opts;
 
@@ -53,9 +52,13 @@ public sealed class IndexerWorker : BackgroundService
 
                 _log.LogInformation("Pulled {Count} pending images", batch.Count);
 
+                // Points to upsert
                 var clipPoints = new List<(string id, float[] vec, Dictionary<string, object?> payload)>();
                 var facePoints = new List<(string id, float[] vec, Dictionary<string, object?> payload)>();
-                var readyIds = new HashSet<string>(); // candidates to mark Done after successful upsert
+
+                // Map imageId -> pointId so we can reconcile after upsert
+                var imageToPoint = new Dictionary<string, string>();
+                var readyImageIds = new HashSet<string>();
 
                 foreach (var img in batch)
                 {
@@ -64,24 +67,33 @@ public sealed class IndexerWorker : BackgroundService
                         if (!File.Exists(img.AbsolutePath))
                             throw new FileNotFoundException("File not found", img.AbsolutePath);
 
+                        // Unified payload (source of truth)
                         var payload = new Dictionary<string, object?>
                         {
-                            ["imageId"] = img.Id,           // keep original SHA-256 here
+                            ["imageId"] = img.Id,            // your SHA-256-of-path id
                             ["albumId"] = img.AlbumId,
                             ["subjectId"] = img.SubjectId,
-                            ["path"] = img.AbsolutePath,
+                            ["absolutePath"] = img.AbsolutePath,  // <-- renamed from "path"
                             ["takenAt"] = img.TakenAt,
                             ["mediaType"] = img.MediaType
                         };
 
-                        var pointId = DeterministicGuid.FromString(img.Id).ToString(); // <-- UUID for Qdrant
+                        var pointId = DeterministicGuid.FromString(img.Id).ToString();
+                        imageToPoint[img.Id] = pointId;
+
+                        var producedAny = false;
 
                         if (_opts.EnableClip)
                         {
                             await using var clipFs = File.OpenRead(img.AbsolutePath);
                             var clipVec = await _embedder.EmbedImageAsync(clipFs, Path.GetFileName(img.AbsolutePath), stoppingToken);
                             if (clipVec is { Length: > 0 })
+                            {
+                                // (optional) normalize for cosine stability
+                                L2NormalizeInPlace(clipVec);
                                 clipPoints.Add((pointId, clipVec, payload));
+                                producedAny = true;
+                            }
                         }
 
                         if (_opts.EnableFace)
@@ -89,18 +101,19 @@ public sealed class IndexerWorker : BackgroundService
                             await using var faceFs = File.OpenRead(img.AbsolutePath);
                             var faceVec = await _embedder.EmbedFaceAsync(faceFs, Path.GetFileName(img.AbsolutePath), stoppingToken);
                             if (faceVec is { Length: > 0 })
+                            {
+                                L2NormalizeInPlace(faceVec);
                                 facePoints.Add((pointId, faceVec, payload));
+                                producedAny = true;
+                            }
                         }
 
-                        // if at least one vector exists, this id is ready for upsert
-                        if ((_opts.EnableClip && clipPoints.Any(p => p.id == img.Id)) ||
-                            (_opts.EnableFace && facePoints.Any(p => p.id == img.Id)))
+                        if (producedAny)
                         {
-                            readyIds.Add(img.Id);
+                            readyImageIds.Add(img.Id);
                         }
                         else
                         {
-                            // no vectors produced -> mark error so it doesn't spin forever
                             await _images.MarkErrorAsync(img.Id, "No vectors produced", stoppingToken);
                         }
                     }
@@ -111,45 +124,42 @@ public sealed class IndexerWorker : BackgroundService
                     }
                 }
 
-                // Upsert to Qdrant (batch)
-                var upsertedOk = new HashSet<string>();
+                // ---- Upsert to Qdrant (independent; no nesting; no duplicates) ----
+                var upsertedPointIds = new HashSet<string>();
 
                 if (clipPoints.Count > 0)
                 {
-                    // CLIP
-                    if (clipPoints.Count > 0)
-                    {
-                        await _upsert.UpsertAsync(
-                            _qopts.ClipCollection,
-                            clipPoints.Select(p => (p.id, p.vec, (object)p.payload)),
-                            stoppingToken);
+                    await _upsert.UpsertAsync(
+                        _qopts.ClipCollection,
+                        clipPoints.Select(p => (p.id, p.vec, (object)p.payload)),
+                        stoppingToken);
 
-                        _log.LogInformation("Upserted {Count} CLIP points", clipPoints.Count);
-                        foreach (var p in clipPoints) upsertedOk.Add(p.id);
-                    }
+                    _log.LogInformation("Upserted {Count} CLIP points", clipPoints.Count);
+                    foreach (var p in clipPoints) upsertedPointIds.Add(p.id);
+                }
 
-                    // FACE
-                    if (facePoints.Count > 0)
-                    {
-                        await _upsert.UpsertAsync(
-                            _qopts.FaceCollection,
-                            facePoints.Select(p => (p.id, p.vec, (object)p.payload)),
-                            stoppingToken);
-
-                        _log.LogInformation("Upserted {Count} FACE points", facePoints.Count);
-                        foreach (var p in facePoints) upsertedOk.Add(p.id);
-                    }
+                if (facePoints.Count > 0)
+                {
+                    await _upsert.UpsertAsync(
+                        _qopts.FaceCollection,
+                        facePoints.Select(p => (p.id, p.vec, (object)p.payload)),
+                        stoppingToken);
 
                     _log.LogInformation("Upserted {Count} FACE points", facePoints.Count);
-                    foreach (var p in facePoints) upsertedOk.Add(p.id);
+                    foreach (var p in facePoints) upsertedPointIds.Add(p.id);
                 }
-                // Mark Done only if upsert succeeded
-                foreach (var id in readyIds)
+
+                // ---- Mark Done only if we know the corresponding pointId was upserted ----
+                foreach (var imageId in readyImageIds)
                 {
-                    if (upsertedOk.Contains(id))
-                        await _images.MarkDoneAsync(id, stoppingToken);
+                    if (imageToPoint.TryGetValue(imageId, out var pid) && upsertedPointIds.Contains(pid))
+                    {
+                        await _images.MarkDoneAsync(imageId, stoppingToken);
+                    }
                     else
-                        _log.LogWarning("Vectors produced for {Id} but upsert did not confirm; leaving as pending", id);
+                    {
+                        _log.LogWarning("Vectors produced for {Id} but upsert did not confirm; leaving as pending", imageId);
+                    }
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -166,4 +176,11 @@ public sealed class IndexerWorker : BackgroundService
         _log.LogInformation("Indexer stopping");
     }
 
+    private static void L2NormalizeInPlace(float[] v)
+    {
+        double s = 0;
+        for (int i = 0; i < v.Length; i++) s += v[i] * v[i];
+        var inv = (float)(1.0 / Math.Sqrt(s + 1e-12));
+        for (int i = 0; i < v.Length; i++) v[i] *= inv;
+    }
 }

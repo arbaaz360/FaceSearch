@@ -12,7 +12,7 @@ services:
       # keep or change; relative to this file’s folder
       - ./qdrant_storage:/qdrant/storage
 
-  # --- MONGODB ---
+  # --- MONGODB ----
   mongo:
     image: mongo:6-jammy
     container_name: facesearch-mongo

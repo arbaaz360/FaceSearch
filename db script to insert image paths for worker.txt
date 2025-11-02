@@ -1,0 +1,38 @@
+use facesearch;
+
+// start clean
+ db.images.drop();
+
+const ALBUM = "shamasikander";
+const BASE  = "C:\\\\Users\\\\ASUS\\\\Downloads\\\\Facial_Recognition\\\\Pictures\\\\shamasikander\\\\";
+const TOTAL = 7; // <-- set to the actual count (e.g., 7 if you have 0001..0007)
+
+// helper
+const pad4 = n => n.toString().padStart(4, "0");
+
+// build docs matching ImageDocMongo
+const now = new Date();
+const docs = [];
+for (let i = 1; i <= TOTAL; i++) {
+  const id = pad4(i);
+  docs.push({
+    Id: id,                                   // string
+    AlbumId: ALBUM,                            // string
+    AbsolutePath: BASE + id + ".jpeg",          // full path to file
+    MediaType: "image",                        // string
+    EmbeddingStatus: "pending",                // "pending" | "done" | "error"
+    CreatedAt: now,                            // Date
+    EmbeddedAt: null,                          // optional
+    Error: null,                               // optional
+    SubjectId: null,                           // optional
+    TakenAt: null                              // optional
+  });
+}
+
+db.images.insertMany(docs);
+
+// minimal useful indexes for your worker/repo
+db.images.createIndex({ Id: 1 }, { name: "ux_id", unique: true });
+db.images.createIndex({ EmbeddingStatus: 1 }, { name: "ix_status" });
+
+

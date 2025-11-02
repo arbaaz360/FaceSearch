@@ -21,4 +21,14 @@ INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
 INFO:     Finished server process [44640]
-^C
+^CC:\Users\ASUS\Downloads\Facial_Recognition\FaceSearch\embedder\.venv\Lib\site-packages\timm\models\layers\__init__.py:48: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+INFO:     Started server process [7172]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8090 (Press CTRL+C to quit)
+C:\Users\ASUS\Downloads\Facial_Recognition\FaceSearch\embedder\.venv\Lib\site-packages\torch\nn\modules\activation.py:1230: UserWarning: The operator 'aten::_native_multi_head_attention' is not currently supported on the DML backend and will fall back to run on the CPU. This may have performance implications. (Triggered internally at C:\__w\1\s\pytorch-directml-plugin\torch_directml\csrc\dml\dml_cpu_fallback.cpp:17.)
+  return torch._native_multi_head_attention(
+C:\Users\ASUS\Downloads\Facial_Recognition\FaceSearch\embedder\.venv\Lib\site-packages\PIL\Image.py:1039: UserWarning: Palette images with Transparency expressed in bytes should be converted to RGBA images
+  warnings.warn(
+WARNING:python_multipart.multipart:Did not find CR at end of boundary (38)

@@ -1,25 +1,38 @@
-﻿using MongoDB.Bson;
+﻿using FaceSearch.Infrastructure.Persistence.Mongo;
+using Infrastructure.Mongo.Models;
+using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 
-namespace FaceSearch.Infrastructure.Persistence.Mongo;
+using Microsoft.Extensions.Configuration;
 
-public interface IMongoContext
+
+namespace FaceSearch.Infrastructure.Persistence.Mongo
 {
-    IMongoDatabase Db { get; }
-    IMongoCollection<ImageDocMongo> Images { get; }
-}
-
-public sealed class MongoContext : IMongoContext
-{
-    public IMongoDatabase Db { get; }
-    public IMongoCollection<ImageDocMongo> Images { get; }
-
-    public MongoContext(MongoOptions opt)
+    public sealed class MongoContext : IMongoContext
     {
-        var client = new MongoClient(opt.ConnectionString);
-        Db = client.GetDatabase(opt.Database);
-        Images = Db.GetCollection<ImageDocMongo>(opt.ImagesCollection);
+        public IMongoDatabase Database { get; }
+
+        public IMongoCollection<ImageDocMongo> Images { get; }
+        public IMongoCollection<AlbumMongo> Albums { get; }
+        public IMongoCollection<AlbumClusterMongo> AlbumClusters { get; }
+        public IMongoCollection<ReviewMongo> Reviews { get; }
+
+        public MongoContext(IConfiguration cfg)
+        {
+            var conn = cfg.GetConnectionString("Mongo")
+                       ?? cfg["Mongo:ConnectionString"]
+                       ?? "mongodb://localhost:27017";
+            var dbName = cfg["Mongo:Database"] ?? "facesearch";
+
+            var client = new MongoClient(conn);
+            Database = client.GetDatabase(dbName);
+
+            Images = Database.GetCollection<ImageDocMongo>("images");
+            Albums = Database.GetCollection<AlbumMongo>("albums");
+            AlbumClusters = Database.GetCollection<AlbumClusterMongo>("album_clusters");
+            Reviews = Database.GetCollection<ReviewMongo>("reviews");
+        }
     }
 }
 
@@ -39,4 +52,10 @@ public sealed class ImageDocMongo
     public string? Error { get; set; }
     public string? SubjectId { get; set; }
     public DateTime? TakenAt { get; set; }
+    // NEW: worker sets true when >=1 face detected in this image
+    public bool HasPeople { get; set; } = false;
+    public List<string>? Tags { get; set; }   // NEW: multikey array
+
+
+
 }

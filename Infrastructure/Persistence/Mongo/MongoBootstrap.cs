@@ -1,46 +1,98 @@
-﻿// Infrastructure/Mongo/MongoBootstrap.cs
-using MongoDB.Bson;
+﻿using Infrastructure.Mongo.Models;
 using MongoDB.Driver;
+using System.Threading;
+using System.Threading.Tasks;
 
-public sealed class MongoBootstrap
+namespace FaceSearch.Infrastructure.Persistence.Mongo
 {
-    private readonly IMongoDatabase _db;
-    public MongoBootstrap(IMongoDatabase db) => _db = db;
-
-    public async Task EnsureIndexesAsync(CancellationToken ct = default)
+    public sealed class MongoBootstrap
     {
-        var images = _db.GetCollection<ImageDoc>("images");
+        private readonly IMongoDatabase _db;
+        private readonly string _imagesCollection;
+        private readonly string _reviewsCollection;
 
-        var idx1 = new CreateIndexModel<ImageDoc>(
-            Builders<ImageDoc>.IndexKeys.Ascending(x => x.ImageId),
-            new CreateIndexOptions<ImageDoc>
-            {
-                Name = "ux_image_id",
-                Unique = true,
-                // ✅ only enforce uniqueness when image_id is non-null
-                PartialFilterExpression = Builders<ImageDoc>.Filter.Exists(x => x.ImageId, true)
-            });
-
-        var idx2 = new CreateIndexModel<ImageDoc>(
-            Builders<ImageDoc>.IndexKeys
-                .Ascending(x => x.AlbumId)
-                .Ascending(x => x.Account)
-                .Ascending(x => x.UnixTs),
-            new CreateIndexOptions<ImageDoc> { Name = "ix_album_account_ts" });
-
-        var idx3 = new CreateIndexModel<ImageDoc>(
-            Builders<ImageDoc>.IndexKeys
-                .Ascending(x => x.Tags),
-            new CreateIndexOptions<ImageDoc> { Name = "ix_tags" });
-
-        try
+        public MongoBootstrap(IMongoDatabase db)
         {
-            await images.Indexes.CreateManyAsync(new[] { idx1, idx2, idx3 }, ct);
+            _db = db;
+            _imagesCollection = "images";
+            _reviewsCollection = "reviews";
         }
-        catch (MongoCommandException ex) when (ex.Code == 85)
+
+        public async Task EnsureIndexesAsync(CancellationToken ct = default)
         {
-            // Index already exists with different options; ignore
-            Console.WriteLine("Indexes already exist, continuing...");
+            // === IMAGES ===
+            var images = _db.GetCollection<ImageDocMongo>(_imagesCollection);
+
+            var idxAlbumCreated = new CreateIndexModel<ImageDocMongo>(
+                Builders<ImageDocMongo>.IndexKeys
+                    .Ascending(x => x.AlbumId)
+                    .Ascending(x => x.CreatedAt),
+                new CreateIndexOptions<ImageDocMongo> { Name = "ix_album_created" });
+
+            var idxHasPeople = new CreateIndexModel<ImageDocMongo>(
+                Builders<ImageDocMongo>.IndexKeys
+                    .Ascending(x => x.AlbumId)
+                    .Ascending(x => x.HasPeople),
+                new CreateIndexOptions<ImageDocMongo> { Name = "ix_album_haspeople" });
+
+            var idxTags = new CreateIndexModel<ImageDocMongo>(
+                Builders<ImageDocMongo>.IndexKeys
+                    .Ascending(x => x.AlbumId)
+                    .Ascending("Tags"),
+                new CreateIndexOptions<ImageDocMongo> { Name = "ix_album_tags" });
+            // === ALBUM_CLUSTERS ===
+            var albumClusters = _db.GetCollection<AlbumClusterMongo>("album_clusters");
+
+            // Unique per album+cluster
+            var idxAlbumCluster = new CreateIndexModel<AlbumClusterMongo>(
+                Builders<AlbumClusterMongo>.IndexKeys
+                    .Ascending(x => x.AlbumId)
+                    .Ascending(x => x.ClusterId),
+                new CreateIndexOptions<AlbumClusterMongo> { Name = "ux_album_cluster", Unique = true });
+
+            var idxAlbumImageCount = new CreateIndexModel<AlbumClusterMongo>(
+                Builders<AlbumClusterMongo>.IndexKeys
+                    .Ascending(x => x.AlbumId)
+                    .Descending(x => x.ImageCount),
+                new CreateIndexOptions<AlbumClusterMongo> { Name = "ix_album_imagecount" });
+
+            await albumClusters.Indexes.CreateManyAsync(new[] { idxAlbumCluster, idxAlbumImageCount }, ct);
+
+            await images.Indexes.CreateManyAsync(new[]
+            {
+                idxAlbumCreated,
+                idxHasPeople,
+                idxTags
+            }, ct);
+
+            // === REVIEWS ===
+            var reviews = _db.GetCollection<ReviewMongo>(_reviewsCollection);
+
+            var idxPendingUnique = new CreateIndexModel<ReviewMongo>(
+                Builders<ReviewMongo>.IndexKeys
+                    .Ascending(x => x.Type)
+                    .Ascending(x => x.Status)
+                    .Ascending(x => x.AlbumId)
+                    .Ascending(x => x.ClusterId),
+                new CreateIndexOptions<ReviewMongo>
+                {
+                    Name = "ux_pending_review",
+                    Unique = true,
+                    PartialFilterExpression = Builders<ReviewMongo>.Filter.Eq(x => x.Status, ReviewStatus.pending)
+                });
+
+            var idxTypeStatus = new CreateIndexModel<ReviewMongo>(
+                Builders<ReviewMongo>.IndexKeys
+                    .Ascending(x => x.Type)
+                    .Ascending(x => x.Status)
+                    .Ascending(x => x.CreatedAt),
+                new CreateIndexOptions<ReviewMongo> { Name = "ix_type_status_created" });
+
+            await reviews.Indexes.CreateManyAsync(new[]
+            {
+                idxPendingUnique,
+                idxTypeStatus
+            }, ct);
         }
     }
 }

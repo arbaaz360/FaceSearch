@@ -1,9 +1,8 @@
-﻿// Infrastructure/Qdrant/QdrantCollectionBootstrap.cs
-using Microsoft.Extensions.Logging;
-using System.Net.Http.Json;
-using System.Text.Json;
+﻿using Microsoft.Extensions.Logging;
 
 namespace FaceSearch.Infrastructure.Qdrant;
+
+public sealed record CollectionSpec(string Name, int VectorSize, string Distance);
 
 public sealed class QdrantCollectionBootstrap
 {

@@ -44,6 +44,90 @@ public sealed class QdrantClient : IQdrantClient
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
     }
+
+
+    public async Task<List<(string id, float[] vector, IDictionary<string, object?> payload)>> ScrollAllAsync(
+     string collection,
+     string albumIdFilter,
+     bool withVectors,
+     CancellationToken ct)
+    {
+        var results = new List<(string, float[], IDictionary<string, object?>)>();
+        string? nextOffset = null;
+
+        do
+        {
+            object? offsetToSend = nextOffset;
+
+            var request = new
+            {
+                filter = new
+                {
+                    must = new object[]
+                    {
+                    new { key = "albumId", match = new { value = albumIdFilter } }
+                    }
+                },
+                with_payload = true,
+                with_vectors = withVectors,
+                limit = 256,
+                offset = offsetToSend
+            };
+
+            var resp = await _http.PostAsJsonAsync($"/collections/{collection}/points/scroll", request, ct);
+            resp.EnsureSuccessStatusCode();
+
+            await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+
+            if (!doc.RootElement.TryGetProperty("result", out var resultElem))
+                break;
+
+            if (resultElem.TryGetProperty("points", out var pointsElem))
+            {
+                foreach (var p in pointsElem.EnumerateArray())
+                {
+                    var id = p.GetProperty("id").GetString() ?? string.Empty;
+
+                    var payload = p.TryGetProperty("payload", out var payloadElem)
+                        ? payloadElem.Deserialize<Dictionary<string, object?>>(_json) ?? new()
+                        : new Dictionary<string, object?>();
+
+                    float[] vec = Array.Empty<float>();
+                    if (withVectors && p.TryGetProperty("vector", out var vElem))
+                    {
+                        // Qdrant may return a single unnamed vector (array) or an object of named vectors
+                        if (vElem.ValueKind == JsonValueKind.Array)
+                        {
+                            vec = vElem.EnumerateArray().Select(x => x.GetSingle()).ToArray();
+                        }
+                        else if (vElem.ValueKind == JsonValueKind.Object)
+                        {
+                            // take the first vector entry (e.g., {"arcface_512":[...]} )
+                            foreach (var prop in vElem.EnumerateObject())
+                            {
+                                vec = prop.Value.EnumerateArray().Select(x => x.GetSingle()).ToArray();
+                                break;
+                            }
+                        }
+                    }
+
+                    results.Add((id, vec, payload));
+                }
+            }
+
+            // ✅ Safely extract the string before disposing `doc`
+            nextOffset = resultElem.TryGetProperty("next_page_offset", out var np) &&
+                         np.ValueKind == JsonValueKind.String
+                ? np.GetString()
+                : null;
+
+        } while (!string.IsNullOrEmpty(nextOffset));
+
+        return results;
+    }
+
+
     public async Task<IReadOnlyList<QdrantSearchHit>> SearchHitsAsync(
     string collection,
     float[] vector,
@@ -67,24 +151,21 @@ public sealed class QdrantClient : IQdrantClient
 
 
     public async Task<List<QdrantPoint>> SearchAsync(
-           string collection,
-           float[] vector,
-           int limit,
-           string? albumIdFilter = null,
-           string? accountFilter = null,
-           string[]? tagsAnyOf = null,
-           CancellationToken ct = default)
+    string collection,
+    float[] vector,
+    int limit,
+    string? albumIdFilter = null,
+    string? accountFilter = null,
+    string[]? tagsAnyOf = null,
+    CancellationToken ct = default)
     {
         object? filter = null;
         var must = new List<object>();
 
         if (!string.IsNullOrWhiteSpace(albumIdFilter))
             must.Add(new { key = "albumId", match = new { value = albumIdFilter } });
-
-
         if (!string.IsNullOrWhiteSpace(accountFilter))
             must.Add(new { key = "account", match = new { value = accountFilter } });
-
         if (tagsAnyOf is { Length: > 0 })
             must.Add(new { key = "tags", @in = tagsAnyOf });
 
@@ -97,14 +178,29 @@ public sealed class QdrantClient : IQdrantClient
             with_payload = true,
             with_vectors = false,
             filter
+            // optional: score_threshold = 0.56
         };
 
+        var url = $"/collections/{Uri.EscapeDataString(collection)}/points/search";
+        var resp = await _http.PostAsJsonAsync(url, body, ct);
 
-        var resp = await _http.PostAsJsonAsync($"/collections/{collection}/points/search", body, ct);
-        resp.EnsureSuccessStatusCode();
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            _log?.LogWarning("Qdrant search 404: collection '{Collection}' not found", collection);
+            return new List<QdrantPoint>(); // treat as empty – first-run bootstrap-safe
+        }
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var txt = await resp.Content.ReadAsStringAsync(ct);
+            _log?.LogError("Qdrant search failed ({Status}) on {Collection}: {Body}", resp.StatusCode, collection, txt);
+            resp.EnsureSuccessStatusCode();
+        }
+
         var doc = await resp.Content.ReadFromJsonAsync<QdrantSearchResponse>(cancellationToken: ct);
         return doc?.result ?? new List<QdrantPoint>();
     }
+
     public async Task<IReadOnlyList<(string id, double score, Dictionary<string, object?>? payload)>>
         SearchAsync(string collection, float[] vector, int limit, string? albumIdFilter, CancellationToken ct)
     {

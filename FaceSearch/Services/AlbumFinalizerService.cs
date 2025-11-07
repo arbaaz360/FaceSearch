@@ -14,7 +14,7 @@ public sealed class AlbumFinalizerService
     // thresholds
     const double T_LINK = 0.60;     // union threshold for same-person link
     const int TOPK = 50;            // neighbors per point
-    const double AGG_THRESHOLD = 0.40;
+    const double AGG_THRESHOLD = 0.50;
     const double AMBIG_DELTA = 0.10;
 
     public AlbumFinalizerService(
@@ -35,80 +35,100 @@ public sealed class AlbumFinalizerService
             => je.GetString(),
         _ => null
     };
-
     public async Task<AlbumMongo> FinalizeAsync(string albumId, CancellationToken ct)
     {
-        // 1) basic counts
-        var imgCountL = await _images.CountDocumentsAsync(Builders<ImageDocMongo>.Filter.Eq(x => x.AlbumId, albumId), cancellationToken: ct);
+        var imgCountL = await _images.CountDocumentsAsync(
+            Builders<ImageDocMongo>.Filter.Eq(x => x.AlbumId, albumId), cancellationToken: ct);
+
         var faceImgCountL = await _images.CountDocumentsAsync(
             Builders<ImageDocMongo>.Filter.And(
                 Builders<ImageDocMongo>.Filter.Eq(x => x.AlbumId, albumId),
                 Builders<ImageDocMongo>.Filter.Eq(x => x.HasPeople, true)), cancellationToken: ct);
+
         int imageCount = (int)Math.Min(imgCountL, int.MaxValue);
         int faceImageCount = (int)Math.Min(faceImgCountL, int.MaxValue);
 
-        // 2) fetch all face points for album
         var points = await _qdrant.ScrollAllAsync(
             collection: "faces_arcface_512",
             albumIdFilter: albumId,
             withVectors: true,
-            ct: ct
-        ); // returns List<(id, vector, payload)>
+            ct: ct);
+
+        var albumEmptyDoc = new AlbumMongo
+        {
+            Id = albumId,
+            ImageCount = imageCount,
+            FaceImageCount = faceImageCount,
+            DominantSubject = null,
+            SuspiciousAggregator = false,
+            UpdatedAt = DateTime.UtcNow
+        };
 
         if (points.Count == 0)
         {
-            var album2 = new AlbumMongo
-            {
-                Id = albumId,
-                ImageCount = imageCount,
-                FaceImageCount = faceImageCount,
-                DominantSubject = null,
-                SuspiciousAggregator = false,
-                UpdatedAt = DateTime.UtcNow
-            };
-            await _albums.UpsertAsync(album2, ct);
-          
-            return album2;
+            await _albums.UpsertAsync(albumEmptyDoc, ct);
+            return albumEmptyDoc;
         }
 
-        // 3) union-find clustering by neighbor links >= T_LINK
         var indexOf = points.Select((p, i) => (p.id, i)).ToDictionary(t => t.id, t => t.i);
         var uf = new UnionFind(points.Count);
 
+        // Bounded parallelism to avoid hammering Qdrant
+        var maxDegree = Environment.ProcessorCount; // tune if needed
+        using var sem = new SemaphoreSlim(maxDegree, maxDegree);
+        var tasks = new List<Task>(points.Count);
+
         for (int i = 0; i < points.Count; i++)
         {
-            var p = points[i];
-            var hits = await _qdrant.SearchHitsAsync(
-                collection: "faces_arcface_512",
-                vector: p.vector,
-                limit: TOPK,
-                albumIdFilter: albumId,
-                accountFilter: null,
-                tagsAnyOf: null,
-                ct: ct);
-
-            foreach (var h in hits)
+            await sem.WaitAsync(ct);
+            var idx = i;
+            tasks.Add(Task.Run(async () =>
             {
-                if (h.Score >= T_LINK && indexOf.TryGetValue(h.Id, out var j))
-                    uf.Union(i, j);
-            }
+                try
+                {
+                    var p = points[idx];
+                    var hits = await _qdrant.SearchHitsAsync(
+                        collection: "faces_arcface_512",
+                        vector: p.vector,
+                        limit: TOPK,
+                        albumIdFilter: albumId,
+                        accountFilter: null,
+                        tagsAnyOf: null,
+                        ct: ct);
+
+                    foreach (var h in hits)
+                    {
+                        if (h.Score >= T_LINK && indexOf.TryGetValue(h.Id, out var j))
+                            uf.Union(idx, j);
+                    }
+                }
+                finally { sem.Release(); }
+            }, ct));
         }
 
-        var groups = uf.Components(); // List<List<int>>
+        await Task.WhenAll(tasks);
 
-        // 4) compute cluster docs
+        var groups = uf.Components();
+        if (groups.Count == 0)
+        {
+            await _albums.UpsertAsync(albumEmptyDoc, ct);
+            return albumEmptyDoc;
+        }
+
+        var dim = points[0].vector.Length;
         var clusterDocs = new List<AlbumClusterMongo>(groups.Count);
+
         foreach (var comp in groups)
         {
+            if (comp.Count == 0) continue;
+
             var imgs = new HashSet<string>(StringComparer.Ordinal);
             var faces = new List<string>(comp.Count);
-            var centroid = new float[points[0].vector.Length];
+            var centroid = new float[dim];
 
             foreach (var idx in comp)
             {
                 var pt = points[idx];
-
-                // payload is Dictionary<string, object?> where values are JsonElement
                 var payload = (IReadOnlyDictionary<string, object?>?)pt.payload;
 
                 string? imageId = null;
@@ -117,21 +137,14 @@ public sealed class AlbumFinalizerService
 
                 if (!string.IsNullOrEmpty(imageId))
                     imgs.Add(imageId!);
-                else
-                {
-                    // optional: log once in a while to confirm
-                    // _log?.LogWarning("Missing imageId in payload for face {FaceId}", pt.id);
-                }
 
                 faces.Add(pt.id);
 
                 var vvec = pt.vector;
-                for (int k = 0; k < centroid.Length; k++)
-                    centroid[k] += vvec[k];
+                for (int k = 0; k < dim; k++) centroid[k] += vvec[k];
             }
 
-            for (int k = 0; k < centroid.Length; k++)
-                centroid[k] /= Math.Max(1, comp.Count);
+            for (int k = 0; k < dim; k++) centroid[k] /= Math.Max(1, comp.Count);
 
             var clusterId = $"cluster::{albumId}::{Guid.NewGuid():N}";
             clusterDocs.Add(new AlbumClusterMongo
@@ -140,8 +153,8 @@ public sealed class AlbumFinalizerService
                 AlbumId = albumId,
                 ClusterId = clusterId,
                 FaceCount = comp.Count,
-                ImageCount = imgs.Count,                  // <-- now reflects distinct images
-                Centroid512 = centroid,
+                ImageCount = imgs.Count,
+               // Centroid512 = centroid,
                 SampleFaceIds = faces.Take(10).ToList(),
                 ImageIds = imgs.ToList(),
                 UpdatedAt = DateTime.UtcNow,
@@ -149,12 +162,10 @@ public sealed class AlbumFinalizerService
             });
         }
 
-        // 5) replace clusters for album
         await _clusterCol.DeleteManyAsync(x => x.AlbumId == albumId, ct);
         if (clusterDocs.Count > 0)
             await _clusterCol.InsertManyAsync(clusterDocs, cancellationToken: ct);
 
-        // 6) dominance
         var top = clusterDocs.OrderByDescending(c => c.ImageCount).FirstOrDefault();
         var ratio = (faceImageCount > 0 && top != null)
             ? (double)top.ImageCount / faceImageCount
@@ -170,14 +181,15 @@ public sealed class AlbumFinalizerService
                 ClusterId = top.ClusterId,
                 Ratio = ratio,
                 SampleFaceId = top.SampleFaceIds.FirstOrDefault(),
-                Centroid512 = top.Centroid512
+                ImageCount = top.ImageCount
+                //,Centroid512 = top.Centroid512
             },
-            SuspiciousAggregator = ratio < AGG_THRESHOLD,
+            SuspiciousAggregator = ratio < AGG_THRESHOLD, // “owner-ness” low → aggregator
             UpdatedAt = DateTime.UtcNow
         };
+
         await _albums.UpsertAsync(album, ct);
         return album;
-        // reviews (optional): create pending review if suspicious/ambiguous…
     }
 
     private sealed class UnionFind
@@ -188,4 +200,13 @@ public sealed class AlbumFinalizerService
         public void Union(int a, int b) { a = Find(a); b = Find(b); if (a == b) return; if (r[a] < r[b]) p[a] = b; else if (r[b] < r[a]) p[b] = a; else { p[b] = a; r[a]++; } }
         public List<List<int>> Components() { var map = new Dictionary<int, List<int>>(); for (int i = 0; i < p.Length; i++) { var r = Find(i); if (!map.TryGetValue(r, out var l)) { l = new(); map[r] = l; } l.Add(i); } return map.Values.ToList(); }
     }
+    public sealed record AlbumLinkCandidate(
+    string SourceAlbumId,
+    string TargetAlbumId,
+    double MeanScore,
+    int Votes,
+    string? SourceSampleFaceId,
+    string? TargetSampleFaceId);
+
+
 }

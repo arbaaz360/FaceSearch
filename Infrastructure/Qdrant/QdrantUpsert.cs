@@ -17,10 +17,10 @@ namespace FaceSearch.Infrastructure.Qdrant
 
         public async Task UpsertAsync(
             string collection,
-            IEnumerable<(string id, float[] vector, object payload)> points,
+            IEnumerable<(string id, float[] vector, IDictionary<string, object?> payload)> points,
             CancellationToken ct)
         {
-            var url = $"/collections/{collection}/points";
+            var url = $"/collections/{collection}/points?wait=true&ordering=weak";
 
             var body = new
             {
@@ -29,7 +29,7 @@ namespace FaceSearch.Infrastructure.Qdrant
                     id = p.id,
                     vector = p.vector,
                     payload = p.payload
-                }).ToArray()
+                })
             };
 
             var resp = await _http.PutAsJsonAsync(url, body, ct);
@@ -42,4 +42,6 @@ namespace FaceSearch.Infrastructure.Qdrant
             }
         }
     }
+
+
 }

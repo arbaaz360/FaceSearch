@@ -56,22 +56,6 @@ public sealed class SearchService : ISearchService
         return new TextSearchResponse { Hits = results };
     }
 
-    private static Contracts.Search.SearchHit ToContractHit(FaceSearch.Infrastructure.Qdrant.QdrantSearchHit h)
-    {
-        static string? S(IReadOnlyDictionary<string, object?> p, string key)
-            => p.TryGetValue(key, out var v) && v is not null ? v.ToString() : null;
-
-        return new Contracts.Search.SearchHit
-        {
-            ImageId = S(h.Payload, "ImageId") ?? "",
-            AlbumId = S(h.Payload, "AlbumId"),
-            AbsolutePath = S(h.Payload, "AbsolutePath") ?? "",
-            SubjectId = S(h.Payload, "SubjectId"),
-            PreviewUrl = S(h.Payload, "PreviewUrl"),
-            Score = h.Score
-        };
-    }
-
    
     public async Task<float[]> GetClipForTextAsync(string query, CancellationToken ct = default)
     {

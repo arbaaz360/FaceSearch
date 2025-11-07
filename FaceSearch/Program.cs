@@ -1,5 +1,4 @@
-﻿using Application.Albums;
-using Application.Indexing;
+﻿using Application.Indexing;
 using FaceSearch.Application.Search;
 using FaceSearch.Infrastructure;
 using FaceSearch.Infrastructure.Embedder;
@@ -7,6 +6,8 @@ using FaceSearch.Infrastructure.Indexing;
 using FaceSearch.Infrastructure.Persistence.Mongo;
 using FaceSearch.Infrastructure.Persistence.Mongo.Repositories;
 using FaceSearch.Infrastructure.Qdrant;
+using FaceSearch.Services.Implementations;
+using Infrastructure.Mongo.Models;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 
@@ -30,11 +31,10 @@ builder.Services.AddHttpClient<IQdrantUpsert, QdrantUpsert>(c => c.BaseAddress =
 
 // ---------- Mongo (Context + Db projection) ----------
 builder.Services.AddSingleton<IMongoContext, MongoContext>();                           // <— provides Db + collections
-builder.Services.AddSingleton<IMongoDatabase>(sp => sp.GetRequiredService<IMongoContext>().Db);
+builder.Services.AddSingleton<IMongoDatabase>(sp => sp.GetRequiredService<IMongoContext>().Database);
 
 // ✅ Remove BOTH of these duplicates (they’re no longer needed):
-// builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(...));
-// builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(...));
+
 
 // ---------- Bootstraps ----------
 builder.Services.AddSingleton<QdrantCollectionBootstrap>();
@@ -47,13 +47,20 @@ builder.Services.AddScoped<ISeedingService, SeedingService>();
 builder.Services.AddScoped<IImageRepository, ImageRepository>();
 builder.Services.AddScoped<IAlbumRepository, AlbumRepository>();
 builder.Services.AddScoped<IAlbumClusterRepository, AlbumClusterRepository>();
-builder.Services.AddScoped<IReviewRepository, ReviewRepository>();
-builder.Services.AddScoped<AlbumDominanceService>();
+builder.Services.AddScoped<AlbumReviewService>();
+builder.Services.AddSingleton<IReviewRepository, ReviewRepository>();
+
+builder.Services.AddScoped<AlbumFinalizerService>();
+
+
 
 // ---------- Web ----------
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddInfrastructure2();
+builder.Services.AddSingleton<IAlbumRepository, AlbumRepository>();
+
 builder.Logging.AddConsole();
 
 var app = builder.Build();

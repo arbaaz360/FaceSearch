@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using FaceSearch.Infrastructure.Persistence.Mongo.Repositories;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace FaceSearch.Infrastructure.Persistence.Mongo;
 

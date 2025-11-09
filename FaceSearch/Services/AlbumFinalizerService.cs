@@ -1,9 +1,11 @@
-﻿using FaceSearch.Infrastructure.Qdrant;
+﻿using FaceSearch.Infrastructure.Persistence.Mongo;
 using FaceSearch.Infrastructure.Persistence.Mongo.Repositories;
-using FaceSearch.Infrastructure.Persistence.Mongo;
+using FaceSearch.Infrastructure.Qdrant;
+using FaceSearch.Options.Config;
+using Infrastructure.Helpers;
 using Infrastructure.Mongo.Models;
+using Microsoft.Extensions.Options;
 using MongoDB.Driver;
-
 public sealed class AlbumFinalizerService
 {
     private readonly IQdrantClient _qdrant;
@@ -12,20 +14,24 @@ public sealed class AlbumFinalizerService
     private readonly IMongoCollection<AlbumClusterMongo> _clusterCol;
 
     // thresholds
-    const double T_LINK = 0.60;     // union threshold for same-person link
-    const int TOPK = 50;            // neighbors per point
-    const double AGG_THRESHOLD = 0.50;
-    const double AMBIG_DELTA = 0.10;
+    //const double T_LINK = 0.45;     // union threshold for same-person link
+    //const int TOPK = 50;            // neighbors per point
+    //const double AGG_THRESHOLD = 0.50;
+    private readonly AlbumFinalizerOptions _opt;
 
     public AlbumFinalizerService(
         IQdrantClient qdrant,
         IAlbumRepository albums,
+        IOptions<AlbumFinalizerOptions> opt,
         IMongoContext ctx)
     {
         _qdrant = qdrant;
         _albums = albums;
         _images = ctx.Images;
         _clusterCol = ctx.AlbumClusters;
+        _opt = opt.Value;
+
+
     }
     private static string? ReadStr(object? o) =>
     o switch
@@ -48,11 +54,20 @@ public sealed class AlbumFinalizerService
         int imageCount = (int)Math.Min(imgCountL, int.MaxValue);
         int faceImageCount = (int)Math.Min(faceImgCountL, int.MaxValue);
 
-        var points = await _qdrant.ScrollAllAsync(
-            collection: "faces_arcface_512",
-            albumIdFilter: albumId,
-            withVectors: true,
-            ct: ct);
+        var filter = new { must = new object[] { new { key = "albumId", match = new { value = albumId } } } };
+
+        var points = new List<(string id, float[] vector, IDictionary<string, object?> payload)>();
+        string? offset = null;
+        do
+        {
+            var (batch, next) = await _qdrant.ScrollByFilterAsync(
+                "faces_arcface_512", filter, withVectors: true, offset, ct);
+
+            points.AddRange(batch);
+            offset = next;
+        } while (!string.IsNullOrEmpty(offset));
+
+
 
         var albumEmptyDoc = new AlbumMongo
         {
@@ -90,7 +105,7 @@ public sealed class AlbumFinalizerService
                     var hits = await _qdrant.SearchHitsAsync(
                         collection: "faces_arcface_512",
                         vector: p.vector,
-                        limit: TOPK,
+                        limit: _opt.TopK,
                         albumIdFilter: albumId,
                         accountFilter: null,
                         tagsAnyOf: null,
@@ -98,7 +113,8 @@ public sealed class AlbumFinalizerService
 
                     foreach (var h in hits)
                     {
-                        if (h.Score >= T_LINK && indexOf.TryGetValue(h.Id, out var j))
+                        if (h.Id == points[idx].id) continue; // skip self
+                        if (h.Score >= _opt.LinkThreshold && indexOf.TryGetValue(h.Id, out var j))
                             uf.Union(idx, j);
                     }
                 }
@@ -124,7 +140,7 @@ public sealed class AlbumFinalizerService
 
             var imgs = new HashSet<string>(StringComparer.Ordinal);
             var faces = new List<string>(comp.Count);
-            var centroid = new float[dim];
+            // var centroid = new float[dim];
 
             foreach (var idx in comp)
             {
@@ -140,11 +156,11 @@ public sealed class AlbumFinalizerService
 
                 faces.Add(pt.id);
 
-                var vvec = pt.vector;
-                for (int k = 0; k < dim; k++) centroid[k] += vvec[k];
+                //var vvec = pt.vector;
+                //for (int k = 0; k < dim; k++) centroid[k] += vvec[k];
             }
 
-            for (int k = 0; k < dim; k++) centroid[k] /= Math.Max(1, comp.Count);
+            // for (int k = 0; k < dim; k++) centroid[k] /= Math.Max(1, comp.Count);
 
             var clusterId = $"cluster::{albumId}::{Guid.NewGuid():N}";
             clusterDocs.Add(new AlbumClusterMongo
@@ -154,7 +170,7 @@ public sealed class AlbumFinalizerService
                 ClusterId = clusterId,
                 FaceCount = comp.Count,
                 ImageCount = imgs.Count,
-               // Centroid512 = centroid,
+                // Centroid512 = centroid,
                 SampleFaceIds = faces.Take(10).ToList(),
                 ImageIds = imgs.ToList(),
                 UpdatedAt = DateTime.UtcNow,
@@ -184,13 +200,85 @@ public sealed class AlbumFinalizerService
                 ImageCount = top.ImageCount
                 //,Centroid512 = top.Centroid512
             },
-            SuspiciousAggregator = ratio < AGG_THRESHOLD, // “owner-ness” low → aggregator
+            SuspiciousAggregator = ratio < _opt.AggregatorThreshold, // “owner-ness” low → aggregator
             UpdatedAt = DateTime.UtcNow
         };
 
         await _albums.UpsertAsync(album, ct);
+            
+
+
+        // === Build dominant-cluster vectors directly from the in-memory components ===
+        List<float[]> dominantVectors = new();
+        if (top != null)
+        {
+            // Find the component that became `top` by matching face membership.
+            // While building clusterDocs you collected `faces` for each comp.
+            // We'll recreate that logic here so we can map the top cluster back to indices.
+            List<int> dominantComp = null!;
+            int bestImageCount = -1;
+
+            foreach (var comp in groups)
+            {
+                var imgs = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var idx in comp)
+                {
+                    var payload = (IReadOnlyDictionary<string, object?>?)points[idx].payload;
+                    if (payload != null && payload.TryGetValue("imageId", out var raw))
+                    {
+                        var imgId = ReadStr(raw);
+                        if (!string.IsNullOrEmpty(imgId)) imgs.Add(imgId!);
+                    }
+                }
+
+                // Match by imageCount (the same criterion you used to choose `top`)
+                if (imgs.Count > bestImageCount)
+                {
+                    bestImageCount = imgs.Count;
+                    dominantComp = comp;
+                }
+            }
+
+            if (dominantComp != null)
+            {
+                foreach (var idx in dominantComp)
+                {
+                    var v = points[idx].vector;
+                    if (v != null && v.Length == 512) dominantVectors.Add(v);
+                }
+            }
+        }
+
+        // Bail out gracefully if nothing to average
+        if (dominantVectors.Count > 0)
+        {
+            var centroid = dominantVectors.Mean512();
+
+
+            var payload = new Dictionary<string, object?>
+            {
+                ["albumId"] = albumId,
+                ["dominantClusterId"] = top!.ClusterId,
+                ["faceCount"] = dominantVectors.Count,      // <-- FIXED: count, not the vector
+                ["dominantRatio"] = ratio,
+                ["vectorModel"] = "arcface_512",
+                ["updatedAt"] = DateTime.UtcNow
+            };
+
+
+            var pointId = albumId.DominantPointId().ToString();  // ✅ pure UUID
+
+            await _qdrant.UpsertAsync(
+                "album_dominants",
+                new[] { (pointId, centroid, (IDictionary<string, object?>)payload) },
+                ct);
+
+        }
         return album;
     }
+
+
+
 
     private sealed class UnionFind
     {

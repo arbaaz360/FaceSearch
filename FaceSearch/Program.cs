@@ -6,6 +6,7 @@ using FaceSearch.Infrastructure.Indexing;
 using FaceSearch.Infrastructure.Persistence.Mongo;
 using FaceSearch.Infrastructure.Persistence.Mongo.Repositories;
 using FaceSearch.Infrastructure.Qdrant;
+using FaceSearch.Options.Config;
 using FaceSearch.Services.Implementations;
 using Infrastructure.Mongo.Models;
 using Microsoft.Extensions.Options;
@@ -51,7 +52,8 @@ builder.Services.AddScoped<AlbumReviewService>();
 builder.Services.AddSingleton<IReviewRepository, ReviewRepository>();
 
 builder.Services.AddScoped<AlbumFinalizerService>();
-
+builder.Services.Configure<AlbumFinalizerOptions>(
+    builder.Configuration.GetSection("AlbumFinalizer"));
 
 
 // ---------- Web ----------

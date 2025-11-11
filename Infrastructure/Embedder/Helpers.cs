@@ -21,5 +21,11 @@ namespace Infrastructure.Helpers
 
             return new Guid(guid);
         }
+        public static bool IsGuid(this string? s)
+        {
+            Guid g;
+            return Guid.TryParse(s, out g);
+        }
+
     }
 }

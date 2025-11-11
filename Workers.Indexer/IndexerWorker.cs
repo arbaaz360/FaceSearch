@@ -260,7 +260,11 @@ namespace FaceSearch.Workers.Indexer
                                 {
                                     _albumrewviews.UpsertPendingAggregator(album, stoppingToken).GetAwaiter().GetResult();
                                 }
-                                _log.LogInformation("Done with recomputing dominance...", albumId);
+                                else if (album.isSuspectedMergeCandidate)
+                                {
+                                    _albumrewviews.UpsertPendingMerge(album, stoppingToken).GetAwaiter().GetResult();
+                                }
+                                    _log.LogInformation("Done with recomputing dominance...", albumId);
 
                             }
                         }
@@ -368,37 +372,6 @@ namespace FaceSearch.Workers.Indexer
 
             static string NewCluster(string albumId) => $"cluster::{albumId}::{Guid.NewGuid():N}";
         }
-
-
-
-        /// <summary>
-        /// Safely read a string from payload (supports Dictionary&lt;string,object?&gt; and JsonElement cases).
-        /// </summary>
-        private static bool TryGetPayloadString(
-            object? payloadObj,
-            string key,
-            out string? value)
-        {
-            value = null;
-            if (payloadObj is IDictionary<string, object?> dict &&
-                dict.TryGetValue(key, out var raw) && raw is not null)
-            {
-                switch (raw)
-                {
-                    case string s:
-                        value = s;
-                        return true;
-                    case System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.String:
-                        value = je.GetString();
-                        return true;
-                    default:
-                        value = raw.ToString();
-                        return !string.IsNullOrWhiteSpace(value);
-                }
-            }
-            return false;
-        }
-
         private static void L2NormalizeInPlace(float[] v)
         {
             double s = 0;

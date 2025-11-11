@@ -45,87 +45,7 @@ public sealed class QdrantClient : IQdrantClient
         };
     }
 
-
-    public async Task<List<(string id, float[] vector, IDictionary<string, object?> payload)>> ScrollAllAsync(
-     string collection,
-     string albumIdFilter,
-     bool withVectors,
-     CancellationToken ct)
-    {
-        var results = new List<(string, float[], IDictionary<string, object?>)>();
-        string? nextOffset = null;
-
-        do
-        {
-            object? offsetToSend = nextOffset;
-
-            var request = new
-            {
-                filter = new
-                {
-                    must = new object[]
-                    {
-                    new { key = "albumId", match = new { value = albumIdFilter } }
-                    }
-                },
-                with_payload = true,
-                with_vectors = withVectors,
-                limit = 256,
-                offset = offsetToSend
-            };
-
-            var resp = await _http.PostAsJsonAsync($"/collections/{collection}/points/scroll", request, ct);
-            resp.EnsureSuccessStatusCode();
-
-            await using var stream = await resp.Content.ReadAsStreamAsync(ct);
-            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-
-            if (!doc.RootElement.TryGetProperty("result", out var resultElem))
-                break;
-
-            if (resultElem.TryGetProperty("points", out var pointsElem))
-            {
-                foreach (var p in pointsElem.EnumerateArray())
-                {
-                    var id = p.GetProperty("id").GetString() ?? string.Empty;
-
-                    var payload = p.TryGetProperty("payload", out var payloadElem)
-                        ? payloadElem.Deserialize<Dictionary<string, object?>>(_json) ?? new()
-                        : new Dictionary<string, object?>();
-
-                    float[] vec = Array.Empty<float>();
-                    if (withVectors && p.TryGetProperty("vector", out var vElem))
-                    {
-                        // Qdrant may return a single unnamed vector (array) or an object of named vectors
-                        if (vElem.ValueKind == JsonValueKind.Array)
-                        {
-                            vec = vElem.EnumerateArray().Select(x => x.GetSingle()).ToArray();
-                        }
-                        else if (vElem.ValueKind == JsonValueKind.Object)
-                        {
-                            // take the first vector entry (e.g., {"arcface_512":[...]} )
-                            foreach (var prop in vElem.EnumerateObject())
-                            {
-                                vec = prop.Value.EnumerateArray().Select(x => x.GetSingle()).ToArray();
-                                break;
-                            }
-                        }
-                    }
-
-                    results.Add((id, vec, payload));
-                }
-            }
-
-            // ✅ Safely extract the string before disposing `doc`
-            nextOffset = resultElem.TryGetProperty("next_page_offset", out var np) &&
-                         np.ValueKind == JsonValueKind.String
-                ? np.GetString()
-                : null;
-
-        } while (!string.IsNullOrEmpty(nextOffset));
-
-        return results;
-    }
+    
 
 
     public async Task<IReadOnlyList<QdrantSearchHit>> SearchHitsAsync(
@@ -146,6 +66,52 @@ public sealed class QdrantClient : IQdrantClient
             Payload = (IReadOnlyDictionary<string, object?>)(p.payload ??
                        new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase))
         }).ToList();
+    }
+
+    public async Task<(IReadOnlyList<(string id, float[] vector, IDictionary<string, object?> payload)> batch, string? nextOffset)>
+    ScrollByFilterAsync(string collection, object filter, bool withVectors, string? offset, CancellationToken ct)
+    {
+        var req = new { filter, with_payload = true, with_vectors = withVectors, limit = 512, offset };
+        var resp = await _http.PostAsJsonAsync($"/collections/{collection}/points/scroll", req, ct);
+        resp.EnsureSuccessStatusCode();
+
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+
+        var results = new List<(string, float[], IDictionary<string, object?>)>();
+        string? next = null;
+
+        if (doc.RootElement.TryGetProperty("result", out var r))
+        {
+            if (r.TryGetProperty("points", out var pts))
+            {
+                foreach (var p in pts.EnumerateArray())
+                {
+                    var id = p.GetProperty("id").GetString() ?? string.Empty; // ✅ real Qdrant point id
+
+                    float[] vec = Array.Empty<float>();
+                    if (withVectors && p.TryGetProperty("vector", out var v))
+                    {
+                        if (v.ValueKind == JsonValueKind.Array)
+                            vec = v.EnumerateArray().Select(e => e.GetSingle()).ToArray();
+                        else
+                            foreach (var prop in v.EnumerateObject())
+                            { vec = prop.Value.EnumerateArray().Select(e => e.GetSingle()).ToArray(); break; }
+                    }
+
+                    var payload = p.TryGetProperty("payload", out var pl)
+                        ? pl.Deserialize<Dictionary<string, object?>>(_json) ?? new()
+                        : new Dictionary<string, object?>();
+
+                    results.Add((id, vec, payload));
+                }
+            }
+
+            if (r.TryGetProperty("next_page_offset", out var np) && np.ValueKind == JsonValueKind.String)
+                next = np.GetString();
+        }
+
+        return (results.AsReadOnly(), next);
     }
 
 
@@ -294,4 +260,34 @@ public sealed class QdrantClient : IQdrantClient
         var delayMs = (int)Math.Min(_opt.BaseDelayMs * Math.Pow(2, attempt - 1) * jitter, 4000);
         await Task.Delay(delayMs, ct);
     }
+
+
+
+    public async Task UpsertAsync(
+    string collection,
+    IEnumerable<(string id, float[] vector, IDictionary<string, object?> payload)> points,
+    CancellationToken ct)
+    {
+        var body = new
+        {
+            points = points.Select(p => new
+            {
+                id = p.id,
+                vector = p.vector,          // for unnamed vector schema
+                payload = p.payload
+            })
+        };
+
+        var url = $"/collections/{Uri.EscapeDataString(collection)}/points?wait=true";
+        var resp = await _http.PutAsJsonAsync(url, body, ct);
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var txt = await resp.Content.ReadAsStringAsync(ct);
+            _log?.LogError("Qdrant upsert failed {Status} on {Collection}: {Body}", resp.StatusCode, collection, txt);
+            resp.EnsureSuccessStatusCode(); // will throw with 400, but we’ve logged the body
+        }
+    }
+
+
 }

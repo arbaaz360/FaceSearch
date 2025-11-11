@@ -13,4 +13,6 @@ public static class DeterministicGuid
         var hash = md5.ComputeHash(Encoding.UTF8.GetBytes(input));
         return new Guid(hash);
     }
+    public static string DominantPointId(this string albumId) =>
+    DeterministicGuid.FromString($"dom:{albumId}").ToString();
 }

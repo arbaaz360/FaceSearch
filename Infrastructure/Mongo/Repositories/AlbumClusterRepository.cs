@@ -80,7 +80,7 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo.Repositories
             if (currentSamples.Count > sampleCap)
                 currentSamples = currentSamples.Take(sampleCap).ToList();
 
-            float[] centroid;
+            //float[] centroid;
             //if (doc?.Centroid512 is null || doc.Centroid512.Length != vec.Length)
             //{
             //    centroid = (float[])vec.Clone();

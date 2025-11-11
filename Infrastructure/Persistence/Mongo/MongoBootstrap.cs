@@ -65,6 +65,8 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
                 idxTags
             }, ct);
 
+
+
             // === REVIEWS ===
             var reviews = _db.GetCollection<ReviewMongo>(_reviewsCollection);
 

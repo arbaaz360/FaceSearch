@@ -51,5 +51,25 @@ namespace FaceSearch.Services.Implementations
                 : $"Pending review for suspicious aggregator album {album.Id} already exists.");
             return review;
         }
+
+
+        public async Task<ReviewMongo> UpsertPendingMerge(AlbumMongo album, CancellationToken ct)
+        {
+            var review = new ReviewMongo
+            {
+                Type = ReviewType.AlbumMerge,
+                AlbumId = album.Id,
+                ClusterId = null,
+                Status = ReviewStatus.pending,
+                Notes = $"Suspicious duplicate album {album.ImageCount} images and {album.FaceImageCount} face images. Dominant Subject: {album.DominantSubject.ToKeyValueString()} ",
+                Ratio = album.DominantSubject?.Ratio,
+                CreatedAt = DateTime.UtcNow
+            };
+            var inserted = await _reviews.UpsertPendingAggregator(review, false, ct);
+            Console.WriteLine(inserted
+                ? $"Inserted pending review for Suspicious duplicate album {album.Id}."
+                : $"Pending review for suspicious duplicate album {album.Id} already exists.");
+            return review;
+        }
     }
 }

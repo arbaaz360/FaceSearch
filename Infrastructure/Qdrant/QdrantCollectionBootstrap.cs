@@ -19,6 +19,7 @@ public sealed class QdrantCollectionBootstrap
     {
         await EnsureCollectionAsync(new CollectionSpec("clip_512", 512, "Cosine"), ct);
         await EnsureCollectionAsync(new CollectionSpec("faces_arcface_512", 512, "Cosine"), ct);
+        await EnsureCollectionAsync(new CollectionSpec("album_dominants", 512, "Cosine"), ct);
     }
 
     private async Task EnsureCollectionAsync(CollectionSpec spec, CancellationToken ct)
@@ -32,4 +33,5 @@ public sealed class QdrantCollectionBootstrap
         _log.LogInformation("Qdrant collection {Name} missing; creating…", spec.Name);
         await _client.CreateCollectionAsync(spec.Name, spec.VectorSize, spec.Distance, ct);
     }
+
 }

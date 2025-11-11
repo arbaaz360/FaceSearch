@@ -51,6 +51,32 @@ namespace Infrastructure.Helpers
 
             return sb.ToString();
         }
+
+        public static float[] Mean512(this IEnumerable<float[]> vecs)
+        {
+            var sum = new double[512];
+            int n = 0;
+
+            foreach (var v in vecs)
+            {
+                if (v is null || v.Length != 512) continue;
+                for (int i = 0; i < 512; i++) sum[i] += v[i];
+                n++;
+            }
+
+            if (n == 0) throw new InvalidOperationException("No vectors to average");
+
+            var mean = new float[512];
+            for (int i = 0; i < 512; i++) mean[i] = (float)(sum[i] / n);
+
+            // L2 normalize the centroid (good for cosine)
+            double norm = 0;
+            for (int i = 0; i < 512; i++) norm += mean[i] * mean[i];
+            norm = Math.Sqrt(norm) + 1e-9;
+            for (int i = 0; i < 512; i++) mean[i] = (float)(mean[i] / norm);
+
+            return mean;
+        }
     }
 
 

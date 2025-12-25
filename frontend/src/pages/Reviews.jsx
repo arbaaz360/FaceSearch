@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getReviews, getMergeCandidates, updateReviewStatus, mergeAlbums } from '../services/api'
 import { Link, useNavigate } from 'react-router-dom'
+import Pagination from '../components/Pagination'
 
 function Reviews() {
   const [reviews, setReviews] = useState([])
@@ -8,20 +9,33 @@ function Reviews() {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all') // 'all', 'AlbumMerge', 'AggregatorAlbum'
   const [processing, setProcessing] = useState({})
+  const [skip, setSkip] = useState(0)
+  const take = 20
   const navigate = useNavigate()
+
+  const [allReviews, setAllReviews] = useState([])
 
   useEffect(() => {
     loadData()
   }, [filter])
 
+  useEffect(() => {
+    // Apply client-side pagination when skip changes
+    const paginated = allReviews.slice(skip, skip + take)
+    setReviews(paginated)
+  }, [skip, allReviews])
+
   const loadData = async () => {
     setLoading(true)
+    setSkip(0) // Reset to first page when filter changes
     try {
       const [reviewsData, candidatesData] = await Promise.all([
         getReviews(filter === 'all' ? null : filter),
         getMergeCandidates(),
       ])
-      setReviews(reviewsData.reviews || [])
+      const reviews = reviewsData.reviews || []
+      setAllReviews(reviews)
+      setReviews(reviews.slice(0, take)) // Initial page
       setMergeCandidates(candidatesData.candidates || [])
     } catch (error) {
       console.error('Failed to load reviews:', error)
@@ -251,6 +265,15 @@ function Reviews() {
               </div>
             ))}
           </div>
+        )}
+        
+        {allReviews.length > take && (
+          <Pagination 
+            skip={skip} 
+            take={take} 
+            total={allReviews.length} 
+            onPageChange={setSkip} 
+          />
         )}
       </div>
     </div>

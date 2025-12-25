@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { getAlbums, mergeAlbums } from '../services/api'
+import Pagination from '../components/Pagination'
 
 function Albums() {
   const [albums, setAlbums] = useState([])
@@ -8,17 +9,18 @@ function Albums() {
   const [skip, setSkip] = useState(0)
   const [total, setTotal] = useState(0)
   const [merging, setMerging] = useState({})
+  const [includeConfirmedAggregators, setIncludeConfirmedAggregators] = useState(false)
   const navigate = useNavigate()
   const take = 20
 
   useEffect(() => {
     loadAlbums()
-  }, [skip])
+  }, [skip, includeConfirmedAggregators])
 
   const loadAlbums = async () => {
     setLoading(true)
     try {
-      const data = await getAlbums(skip, take)
+      const data = await getAlbums(skip, take, includeConfirmedAggregators)
       setAlbums(data.items || [])
       setTotal(data.total || 0)
     } catch (error) {
@@ -35,8 +37,23 @@ function Albums() {
   return (
     <div>
       <div className="page-header">
-        <h1>Albums</h1>
-        <p>Manage and view all albums ({total} total)</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+          <div>
+            <h1>Albums</h1>
+            <p>Manage and view all albums ({total} total)</p>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+            <input
+              type="checkbox"
+              checked={includeConfirmedAggregators}
+              onChange={(e) => {
+                setIncludeConfirmedAggregators(e.target.checked)
+                setSkip(0) // Reset to first page when filter changes
+              }}
+            />
+            <span className="text-muted">Show confirmed aggregators</span>
+          </label>
+        </div>
       </div>
 
       <div className="grid grid-cols-4">
@@ -82,7 +99,11 @@ function Albums() {
               </div>
               <div>
                 <h3 style={{ marginBottom: '4px', fontSize: '16px' }}>
-                  {album.displayName || album.albumId}
+                  {album.displayName || (() => {
+                    // Remove leading/trailing underscores for display
+                    const id = album.albumId || ''
+                    return id.replace(/^_+/, '').replace(/_+$/, '')
+                  })()}
                 </h3>
                 {album.instagramHandle && (
                   <p className="text-muted" style={{ marginBottom: '8px' }}>
@@ -150,27 +171,12 @@ function Albums() {
         </div>
       )}
 
-      {total > take && (
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '24px' }}>
-          <button
-            className="btn btn-secondary"
-            onClick={() => setSkip(Math.max(0, skip - take))}
-            disabled={skip === 0}
-          >
-            Previous
-          </button>
-          <span style={{ display: 'flex', alignItems: 'center', color: 'var(--muted)' }}>
-            {skip + 1}-{Math.min(skip + take, total)} of {total}
-          </span>
-          <button
-            className="btn btn-secondary"
-            onClick={() => setSkip(skip + take)}
-            disabled={skip + take >= total}
-          >
-            Next
-          </button>
-        </div>
-      )}
+      <Pagination 
+        skip={skip} 
+        take={take} 
+        total={total} 
+        onPageChange={setSkip} 
+      />
     </div>
   )
 }

@@ -42,3 +42,15 @@ internal sealed class ScoredPointDto
     [JsonPropertyName("score")] public double Score { get; init; }
     [JsonPropertyName("payload")] public Dictionary<string, object?>? Payload { get; init; }
 }
+
+internal sealed class QdrantDeleteResponse
+{
+    [JsonPropertyName("result")] public QdrantDeleteResult? Result { get; init; }
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("time")] public double? Time { get; init; }
+}
+
+internal sealed class QdrantDeleteResult
+{
+    [JsonPropertyName("operation_id")] public long? OperationId { get; init; }
+}

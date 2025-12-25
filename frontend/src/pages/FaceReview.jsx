@@ -1,21 +1,26 @@
 import { useState, useEffect } from 'react'
 import { getUnresolvedFaces, resolveFace, whoIsThis } from '../services/api'
+import Pagination from '../components/Pagination'
 
 function FaceReview() {
   const [faces, setFaces] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedFace, setSelectedFace] = useState(null)
   const [resolution, setResolution] = useState({ accept: true, albumId: '', displayName: '', instagramHandle: '' })
+  const [skip, setSkip] = useState(0)
+  const [total, setTotal] = useState(0)
+  const take = 20
 
   useEffect(() => {
     loadFaces()
-  }, [])
+  }, [skip])
 
   const loadFaces = async () => {
     setLoading(true)
     try {
-      const data = await getUnresolvedFaces()
+      const data = await getUnresolvedFaces(skip, take)
       setFaces(data.faces || [])
+      setTotal(data.total || 0)
     } catch (error) {
       console.error('Failed to load faces:', error)
     } finally {
@@ -58,7 +63,7 @@ function FaceReview() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h1>Face Review</h1>
-            <p>Review and resolve unresolved faces ({faces.length} pending)</p>
+            <p>Review and resolve unresolved faces ({total} pending)</p>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
             <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
@@ -185,6 +190,13 @@ function FaceReview() {
           </div>
         </div>
       )}
+      
+      <Pagination 
+        skip={skip} 
+        take={take} 
+        total={total} 
+        onPageChange={setSkip} 
+      />
     </div>
   )
 }

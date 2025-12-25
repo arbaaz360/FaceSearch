@@ -4,30 +4,44 @@ using FaceSearch.Infrastructure.Qdrant;
 using FaceSearch.Options.Config;
 using Infrastructure.Helpers;              // Mean512(), DominantPointId()
 using Infrastructure.Mongo.Models;
+using FaceSearch.Infrastructure.Embedder;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 
 public sealed class AlbumFinalizerService
 {
     private readonly IQdrantClient _qdrant;
+    private readonly QdrantSearchClient _qdrantSearch;
     private readonly IAlbumRepository _albums;
     private readonly IMongoCollection<ImageDocMongo> _images;
     private readonly IMongoCollection<AlbumClusterMongo> _clusterCol;
     private readonly IReviewRepository _reviews;
+    private readonly IEmbedderClient _embedder;
+    private readonly IImageRepository _imageRepo;
+    private readonly ILogger<AlbumFinalizerService> _logger;
     private readonly AlbumFinalizerOptions _opt;
 
     public AlbumFinalizerService(
         IQdrantClient qdrant,
+        QdrantSearchClient qdrantSearch,
         IAlbumRepository albums,
         IOptions<AlbumFinalizerOptions> opt,
         IReviewRepository reviews,
+        IEmbedderClient embedder,
+        IImageRepository imageRepo,
+        ILogger<AlbumFinalizerService> logger,
         IMongoContext ctx)
     {
         _qdrant = qdrant;
+        _qdrantSearch = qdrantSearch;
         _albums = albums;
         _images = ctx.Images;
         _clusterCol = ctx.AlbumClusters;
         _reviews = reviews;
+        _embedder = embedder;
+        _imageRepo = imageRepo;
+        _logger = logger;
         _opt = opt.Value;
     }
 
@@ -35,6 +49,14 @@ public sealed class AlbumFinalizerService
 
     public async Task<AlbumMongo> FinalizeAsync(string albumId, CancellationToken ct)
     {
+        // 0) Check if album is blacklisted - if so, skip finalization
+        var existingAlbum = await _albums.GetAsync(albumId, ct);
+        if (existingAlbum != null && existingAlbum.IsJunk)
+        {
+            _logger.LogInformation("Album '{AlbumId}' is blacklisted (junk), skipping finalization", albumId);
+            return existingAlbum; // Return existing without updating
+        }
+
         // 1) Basic counts
         var (imageCount, faceImageCount) = await GetAlbumCountsAsync(albumId, ct);
 
@@ -78,6 +100,14 @@ public sealed class AlbumFinalizerService
         }
 
         await UpdateMergeCandidateFlagsAsync(albumDoc, duplicate, ct);
+
+        // 8) Detect gender of dominant face to flag male accounts
+        var isMaleAccount = await DetectMaleAccountAsync(albumDoc.DominantSubject, ct);
+        if (isMaleAccount.HasValue)
+        {
+            albumDoc.IsMaleAccount = isMaleAccount.Value;
+            await _albums.UpdateMaleAccountFlagAsync(albumDoc.Id, isMaleAccount.Value, ct);
+        }
 
         return albumDoc;
     }
@@ -128,6 +158,7 @@ public sealed class AlbumFinalizerService
             FaceImageCount = faceImageCount,
             DominantSubject = null,
             SuspiciousAggregator = false,
+            IsMaleAccount = false, // Unknown - no dominant face to check
             UpdatedAt = DateTime.UtcNow
         };
         await _albums.UpsertAsync(albumEmptyDoc, ct);
@@ -260,6 +291,7 @@ public sealed class AlbumFinalizerService
                 ImageCount = top.ImageCount
             },
             SuspiciousAggregator = ratio < _opt.AggregatorThreshold,
+            IsMaleAccount = false, // Will be set by gender detection if dominant face exists
             UpdatedAt = DateTime.UtcNow
         };
 
@@ -422,6 +454,107 @@ public sealed class AlbumFinalizerService
             ct);
     }
 
+    /// <summary>
+    /// Detects if the album represents a male account by checking the gender of the dominant face.
+    /// Returns null if detection cannot be performed (no dominant face, image not found, etc.).
+    /// </summary>
+    private async Task<bool?> DetectMaleAccountAsync(
+        DominantSubjectInfo? dominantSubject,
+        CancellationToken ct)
+    {
+        // No dominant subject means we can't determine gender
+        if (dominantSubject == null || string.IsNullOrWhiteSpace(dominantSubject.SampleFaceId))
+        {
+            return null; // Unknown - no dominant face
+        }
+
+        try
+        {
+            // Get the face point from Qdrant to extract imageId
+            var facePoint = await _qdrantSearch.GetPointPayloadAsync("faces_arcface_512", dominantSubject.SampleFaceId, ct);
+            if (facePoint == null || !facePoint.TryGetValue("imageId", out var imageIdRaw))
+            {
+                _logger.LogWarning("Could not find face point or imageId for faceId: {FaceId}", dominantSubject.SampleFaceId);
+                return null;
+            }
+
+            var imageId = ReadStr(imageIdRaw);
+            if (string.IsNullOrWhiteSpace(imageId))
+            {
+                _logger.LogWarning("ImageId is null or empty for faceId: {FaceId}", dominantSubject.SampleFaceId);
+                return null;
+            }
+
+            // Get image document to retrieve AbsolutePath
+            var imageDoc = await _imageRepo.GetAsync(imageId, ct);
+            if (imageDoc == null || string.IsNullOrWhiteSpace(imageDoc.AbsolutePath))
+            {
+                _logger.LogWarning("Image document not found or path is empty for imageId: {ImageId}", imageId);
+                return null;
+            }
+
+            // Load image (handle both file paths and URLs)
+            Stream? imageStream = null;
+            try
+            {
+                if (imageDoc.AbsolutePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    imageDoc.AbsolutePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Download from URL
+                    using var httpClient = new HttpClient();
+                    var response = await httpClient.GetAsync(imageDoc.AbsolutePath, ct);
+                    response.EnsureSuccessStatusCode();
+                    var imageBytes = await response.Content.ReadAsByteArrayAsync(ct);
+                    imageStream = new MemoryStream(imageBytes);
+                }
+                else
+                {
+                    // Read from file system
+                    if (!System.IO.File.Exists(imageDoc.AbsolutePath))
+                    {
+                        _logger.LogWarning("Image file does not exist: {Path}", imageDoc.AbsolutePath);
+                        return null;
+                    }
+                    imageStream = System.IO.File.OpenRead(imageDoc.AbsolutePath);
+                }
+
+                // Detect gender using embedder (femaleOnly=false to get all genders)
+                var detections = await _embedder.DetectFacesAsync(
+                    imageStream,
+                    Path.GetFileName(imageDoc.AbsolutePath),
+                    femaleOnly: false, // We want to detect male faces too
+                    ct);
+
+                if (detections.Count == 0)
+                {
+                    _logger.LogWarning("No faces detected in image: {Path}", imageDoc.AbsolutePath);
+                    return null;
+                }
+
+                // Use the first detected face (should be the dominant one)
+                var firstFace = detections[0];
+                var gender = firstFace.Gender?.ToLowerInvariant() ?? "unknown";
+
+                // Return true if male, false if female, null if unknown
+                return gender switch
+                {
+                    "male" => true,
+                    "female" => false,
+                    _ => null // Unknown gender
+                };
+            }
+            finally
+            {
+                imageStream?.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error detecting gender for dominant face: {FaceId}", dominantSubject.SampleFaceId);
+            return null; // Unknown on error
+        }
+    }
+
     // ====== UTILITIES ========================================================
 
     private static string? ReadStr(object? o) =>
@@ -437,8 +570,38 @@ public sealed class AlbumFinalizerService
     {
         private readonly int[] p, r;
         public UnionFind(int n) { p = new int[n]; r = new int[n]; for (int i = 0; i < n; i++) p[i] = i; }
-        int Find(int x) => p[x] == x ? x : (p[x] = Find(p[x]));
-        public void Union(int a, int b) { a = Find(a); b = Find(b); if (a == b) return; if (r[a] < r[b]) p[a] = b; else if (r[b] < r[a]) p[b] = a; else { p[b] = a; r[a]++; } }
+        
+        // Iterative Find with path compression to avoid stack overflow
+        private int Find(int x)
+        {
+            // Find root by following parent pointers
+            int root = x;
+            while (p[root] != root)
+            {
+                root = p[root];
+            }
+            
+            // Path compression: update all nodes along the path to point directly to root
+            while (p[x] != root)
+            {
+                int next = p[x];
+                p[x] = root;
+                x = next;
+            }
+            
+            return root;
+        }
+        
+        public void Union(int a, int b)
+        {
+            a = Find(a);
+            b = Find(b);
+            if (a == b) return;
+            if (r[a] < r[b]) p[a] = b;
+            else if (r[b] < r[a]) p[b] = a;
+            else { p[b] = a; r[a]++; }
+        }
+        
         public List<List<int>> Components()
         {
             var map = new Dictionary<int, List<int>>();

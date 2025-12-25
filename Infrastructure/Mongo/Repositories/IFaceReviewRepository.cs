@@ -8,6 +8,7 @@ public interface IFaceReviewRepository
     Task<FaceReviewMongo?> GetAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<FaceReviewMongo>> ListUnresolvedAsync(int take, CancellationToken ct = default);
     Task<IReadOnlyList<FaceReviewMongo>> GetPendingAsync(int skip, int take, CancellationToken ct = default);
+    Task<int> GetPendingCountAsync(CancellationToken ct = default);
     Task<IReadOnlyList<FaceReviewMongo>> GetPendingByGroupAsync(string groupId, CancellationToken ct = default);
     Task<bool> MarkResolvedAsync(
         string id,

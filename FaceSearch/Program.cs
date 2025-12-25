@@ -1,4 +1,5 @@
 ﻿using Application.Indexing;
+using Contracts.Indexing;
 using FaceSearch.Application.Search;
 using FaceSearch.Infrastructure;
 using FaceSearch.Infrastructure.Embedder;
@@ -44,6 +45,7 @@ builder.Services.AddSingleton<MongoBootstrap>();
 // ---------- App services / repos ----------
 builder.Services.AddScoped<ISearchService, SearchService>();
 builder.Services.AddScoped<ISeedingService, SeedingService>();
+builder.Services.AddScoped<IInstagramSeedingService, InstagramSeedingService>();
 
 builder.Services.AddScoped<IImageRepository, ImageRepository>();
 builder.Services.AddScoped<IAlbumRepository, AlbumRepository>();

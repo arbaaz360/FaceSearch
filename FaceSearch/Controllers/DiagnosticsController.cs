@@ -10,6 +10,7 @@ using System.Linq;
 using System.IO;
 using System.Threading;
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Configuration;
 
 namespace FaceSearch.Api.Controllers;
 
@@ -29,6 +30,7 @@ public class DiagnosticsController : ControllerBase
     private readonly IQdrantClient _qdrantClient;
     private readonly IQdrantUpsert _qdrantUpsert;
     private readonly IAlbumClusterRepository _clusterRepo;
+    private readonly IConfiguration _configuration;
 
     public DiagnosticsController(
         IEmbedderClient embedder,
@@ -42,7 +44,8 @@ public class DiagnosticsController : ControllerBase
         IAlbumRepository albumRepo,
         IQdrantClient qdrantClient,
         IQdrantUpsert qdrantUpsert,
-        IAlbumClusterRepository clusterRepo)
+        IAlbumClusterRepository clusterRepo,
+        IConfiguration configuration)
     {
         _embedder = embedder;
         _qdrant = qdrant;
@@ -56,6 +59,7 @@ public class DiagnosticsController : ControllerBase
         _qdrantClient = qdrantClient;
         _qdrantUpsert = qdrantUpsert;
         _clusterRepo = clusterRepo;
+        _configuration = configuration;
     }
 
     [HttpGet("status")]
@@ -155,6 +159,72 @@ public class DiagnosticsController : ControllerBase
             AlbumId = albumId,
             ResetCount = count,
             Message = $"Reset {count} error image(s) back to pending status"
+        });
+    }
+
+    /// <summary>
+    /// Get overall processing statistics (pending, done, error counts) and check if worker is active.
+    /// </summary>
+    [HttpGet("processing-stats")]
+    public async Task<ActionResult<ProcessingStatsResponse>> GetProcessingStats(CancellationToken ct = default)
+    {
+        var images = _mongo.Images;
+        
+        var pending = await images.CountDocumentsAsync(
+            Builders<ImageDocMongo>.Filter.Eq(x => x.EmbeddingStatus, "pending"), cancellationToken: ct);
+        
+        var done = await images.CountDocumentsAsync(
+            Builders<ImageDocMongo>.Filter.Eq(x => x.EmbeddingStatus, "done"), cancellationToken: ct);
+        
+        var error = await images.CountDocumentsAsync(
+            Builders<ImageDocMongo>.Filter.Eq(x => x.EmbeddingStatus, "error"), cancellationToken: ct);
+        
+        var total = pending + done + error;
+        
+        // Get error breakdown by error message (top 10)
+        var errorImages = await images.Find(
+            Builders<ImageDocMongo>.Filter.Eq(x => x.EmbeddingStatus, "error"))
+            .Limit(100)
+            .ToListAsync(ct);
+        
+        var errorGroups = errorImages
+            .Where(img => !string.IsNullOrWhiteSpace(img.Error))
+            .GroupBy(img => img.Error)
+            .Select(g => new { Error = g.Key, Count = g.Count() })
+            .OrderByDescending(x => x.Count)
+            .Take(10)
+            .ToList();
+
+        // Check if worker is active by looking at recent activity
+        // Worker should update EmbeddedAt when marking images as done
+        var recentActivity = await images.Find(
+            Builders<ImageDocMongo>.Filter.And(
+                Builders<ImageDocMongo>.Filter.Eq(x => x.EmbeddingStatus, "done"),
+                Builders<ImageDocMongo>.Filter.Gte(x => x.EmbeddedAt, DateTime.UtcNow.AddMinutes(-5))))
+            .Limit(1)
+            .AnyAsync(ct);
+
+        // Check oldest pending image to see how long they've been waiting
+        var oldestPending = await images.Find(
+            Builders<ImageDocMongo>.Filter.Eq(x => x.EmbeddingStatus, "pending"))
+            .SortBy(x => x.CreatedAt)
+            .Limit(1)
+            .FirstOrDefaultAsync(ct);
+
+        var oldestPendingAge = oldestPending != null 
+            ? (DateTime.UtcNow - oldestPending.CreatedAt).TotalMinutes 
+            : (double?)null;
+
+        return Ok(new ProcessingStatsResponse
+        {
+            TotalImages = total,
+            PendingImages = pending,
+            DoneImages = done,
+            ErrorImages = error,
+            ProgressPercent = total > 0 ? (int)((done * 100.0) / total) : 0,
+            TopErrors = errorGroups.Select(g => new ErrorSummary { Message = g.Error ?? "Unknown", Count = g.Count }).ToList(),
+            WorkerActive = recentActivity,
+            OldestPendingAgeMinutes = oldestPendingAge
         });
     }
 
@@ -1128,6 +1198,211 @@ public class DiagnosticsController : ControllerBase
             });
         }
     }
+
+    [HttpGet("instagram/debug")]
+    public async Task<ActionResult> DebugInstagramAccount([FromQuery] string username, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+            return BadRequest(new { error = "username parameter is required" });
+
+        try
+        {
+            var conn = _configuration.GetConnectionString("Mongo")
+                      ?? _configuration["Mongo:ConnectionString"]
+                      ?? "mongodb://localhost:27017";
+            var client = new MongoClient(conn);
+            var instagramDb = client.GetDatabase(_configuration["Mongo:InstagramDbName"] ?? "instafollowing");
+            var followingsColl = instagramDb.GetCollection<BsonDocument>("followings");
+            var postsColl = instagramDb.GetCollection<BsonDocument>("posts");
+
+            // Check followings
+            var following = await followingsColl.Find(
+                Builders<BsonDocument>.Filter.Eq("following_username", username)).FirstOrDefaultAsync(ct);
+
+            // Check posts collection for following_username (this is what InstagramSeedingService uses)
+            var postsByFollowing = await postsColl.CountDocumentsAsync(
+                Builders<BsonDocument>.Filter.Eq("following_username", username), cancellationToken: ct);
+            
+            // Also check for username field (legacy)
+            var postsExact = await postsColl.CountDocumentsAsync(
+                Builders<BsonDocument>.Filter.Eq("username", username), cancellationToken: ct);
+
+            // Get sample post usernames (check for following_username field instead)
+            var samplePosts = await postsColl.Find(Builders<BsonDocument>.Filter.Empty)
+                .Limit(10)
+                .ToListAsync(ct);
+            var sampleUsernames = new List<string>();
+            foreach (var post in samplePosts)
+            {
+                if (post.TryGetValue("following_username", out var followingUser) && followingUser.IsString)
+                    sampleUsernames.Add(followingUser.AsString);
+                else if (post.TryGetValue("username", out var usernameVal) && usernameVal.IsString)
+                    sampleUsernames.Add(usernameVal.AsString);
+            }
+            sampleUsernames = sampleUsernames.Distinct().Take(10).ToList();
+
+            return Ok(new
+            {
+                username,
+                followingFound = following != null,
+                followingData = following != null ? new
+                {
+                    following_username = following.GetValue("following_username")?.AsString,
+                    target_username = following.GetValue("target_username")?.AsString,
+                    ingested = following.GetValue("ingested", false).AsBoolean,
+                    ingested_at = following.Contains("ingested_at") ? following.GetValue("ingested_at")?.ToUniversalTime() : null
+                } : null,
+                postsByFollowingUsername = (int)postsByFollowing,
+                postsByUsernameField = (int)postsExact,
+                sampleUsernamesInPosts = sampleUsernames,
+                message = postsByFollowing > 0 
+                    ? $"{postsByFollowing} posts found in 'posts' collection with following_username='{username}'"
+                    : (postsExact > 0
+                        ? $"{postsExact} posts found with username='{username}' (but not following_username)"
+                        : "No posts found for this username in 'posts' collection.")
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error debugging Instagram account {Username}", username);
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Comprehensive inspection of Instagram data for a username - shows document structure and sample posts.
+    /// </summary>
+    [HttpGet("instagram/inspect")]
+    public async Task<ActionResult> InspectInstagramAccount([FromQuery] string username, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+            return BadRequest(new { error = "username parameter is required" });
+
+        try
+        {
+            var conn = _configuration.GetConnectionString("Mongo")
+                      ?? _configuration["Mongo:ConnectionString"]
+                      ?? "mongodb://localhost:27017";
+            var client = new MongoClient(conn);
+            var instagramDb = client.GetDatabase(_configuration["Mongo:InstagramDbName"] ?? "instafollowing");
+            var followingsColl = instagramDb.GetCollection<BsonDocument>("followings");
+            var postsColl = instagramDb.GetCollection<BsonDocument>("posts");
+
+            var result = new Dictionary<string, object?>
+            {
+                ["username"] = username,
+                ["checked_at"] = DateTime.UtcNow
+            };
+
+            // Check followings collection
+            var following = await followingsColl.Find(
+                Builders<BsonDocument>.Filter.Eq("following_username", username)).FirstOrDefaultAsync(ct);
+            
+            if (following != null)
+            {
+                result["following_document_exists"] = true;
+                result["following_top_level_fields"] = following.Names.ToList();
+                
+                // Try to extract post_list from followings document
+                if (following.TryGetValue("response_data", out var responseDataValue) && responseDataValue.IsBsonDocument)
+                {
+                    var responseData = responseDataValue.AsBsonDocument;
+                    if (responseData.TryGetValue("data", out var dataValue) && dataValue.IsBsonDocument)
+                    {
+                        var data = dataValue.AsBsonDocument;
+                        if (data.TryGetValue("post_list", out var postListValue) && postListValue.IsBsonArray)
+                        {
+                            var postList = postListValue.AsBsonArray;
+                            result["posts_in_followings_document"] = postList.Count;
+                            if (postList.Count > 0)
+                            {
+                                var firstPost = postList[0].AsBsonDocument;
+                                result["sample_post_from_followings"] = new Dictionary<string, object?>
+                                {
+                                    ["fields"] = firstPost.Names.ToList(),
+                                    ["has_media_list"] = firstPost.Contains("media_list"),
+                                    ["has_code"] = firstPost.Contains("code"),
+                                    ["has_publish_time"] = firstPost.Contains("publish_time")
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                result["following_document_exists"] = false;
+            }
+
+            // Check posts collection
+            var postDoc = await postsColl.Find(
+                Builders<BsonDocument>.Filter.Eq("following_username", username)).FirstOrDefaultAsync(ct);
+            
+            if (postDoc != null)
+            {
+                result["posts_document_exists"] = true;
+                result["posts_top_level_fields"] = postDoc.Names.ToList();
+                
+                // Try to extract post_list from posts document
+                if (postDoc.TryGetValue("response_data", out var responseDataValue) && responseDataValue.IsBsonDocument)
+                {
+                    var responseData = responseDataValue.AsBsonDocument;
+                    if (responseData.TryGetValue("data", out var dataValue) && dataValue.IsBsonDocument)
+                    {
+                        var data = dataValue.AsBsonDocument;
+                        if (data.TryGetValue("post_list", out var postListValue) && postListValue.IsBsonArray)
+                        {
+                            var postList = postListValue.AsBsonArray;
+                            result["posts_in_posts_document"] = postList.Count;
+                            if (postList.Count > 0)
+                            {
+                                var firstPost = postList[0].AsBsonDocument;
+                                var samplePost = new Dictionary<string, object?>();
+                                samplePost["fields"] = firstPost.Names.ToList();
+                                
+                                // Extract key fields
+                                if (firstPost.TryGetValue("code", out var code))
+                                    samplePost["code"] = code.ToString();
+                                if (firstPost.TryGetValue("publish_time", out var publishTime))
+                                    samplePost["publish_time"] = publishTime.ToString();
+                                
+                                // Check media_list
+                                if (firstPost.TryGetValue("media_list", out var mediaListValue) && mediaListValue.IsBsonArray)
+                                {
+                                    var mediaList = mediaListValue.AsBsonArray;
+                                    samplePost["media_list_count"] = mediaList.Count;
+                                    if (mediaList.Count > 0)
+                                    {
+                                        var firstMedia = mediaList[0].AsBsonDocument;
+                                        samplePost["first_media_fields"] = firstMedia.Names.ToList();
+                                        if (firstMedia.TryGetValue("media_type", out var mediaType))
+                                            samplePost["first_media_type"] = mediaType.ToString();
+                                        if (firstMedia.TryGetValue("media_url", out var mediaUrl))
+                                            samplePost["first_media_url"] = mediaUrl.ToString();
+                                        if (firstMedia.TryGetValue("thumbnail_url", out var thumbnailUrl))
+                                            samplePost["first_media_thumbnail_url"] = thumbnailUrl.ToString();
+                                    }
+                                }
+                                
+                                result["sample_post_from_posts"] = samplePost;
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                result["posts_document_exists"] = false;
+            }
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error inspecting Instagram account {Username}", username);
+            return StatusCode(500, new { error = ex.Message, stackTrace = ex.StackTrace });
+        }
+    }
 }
 
 public sealed class GenerateClipEmbeddingsResponse
@@ -1218,6 +1493,24 @@ public sealed class ResetErrorsResponse
     public string? AlbumId { get; set; }
     public int ResetCount { get; set; }
     public string Message { get; set; } = string.Empty;
+}
+
+public sealed class ProcessingStatsResponse
+{
+    public long TotalImages { get; set; }
+    public long PendingImages { get; set; }
+    public long DoneImages { get; set; }
+    public long ErrorImages { get; set; }
+    public int ProgressPercent { get; set; }
+    public List<ErrorSummary> TopErrors { get; set; } = new();
+    public bool WorkerActive { get; set; }
+    public double? OldestPendingAgeMinutes { get; set; }
+}
+
+public sealed class ErrorSummary
+{
+    public string Message { get; set; } = string.Empty;
+    public int Count { get; set; }
 }
 
 public sealed class ReviewsResponse

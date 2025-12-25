@@ -19,5 +19,9 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo.Repositories
             bool suspiciousAggregator,
             DateTime updatedAt,
             CancellationToken ct = default);
+        Task UpdateMaleAccountFlagAsync(
+            string albumId,
+            bool isMaleAccount,
+            CancellationToken ct = default);
     }
 }

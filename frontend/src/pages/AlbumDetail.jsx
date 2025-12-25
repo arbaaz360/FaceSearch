@@ -10,6 +10,8 @@ import {
   mergeAlbums,
   clearSuspiciousFlag,
   getAlbumClusters,
+  confirmAggregator,
+  markAsJunk,
 } from '../services/api'
 
 function AlbumDetail() {
@@ -25,6 +27,20 @@ function AlbumDetail() {
   const [newTag, setNewTag] = useState('')
   const [showImage, setShowImage] = useState(false)
   const [merging, setMerging] = useState(false)
+
+  // Helper function to clean albumId: remove leading/trailing underscores only
+  // This preserves underscores that are naturally in usernames (e.g., "user_name")
+  const cleanAlbumId = (id) => {
+    if (!id) return id
+    // Remove leading underscores
+    let cleaned = id.replace(/^_+/, '')
+    // Remove trailing underscores
+    cleaned = cleaned.replace(/_+$/, '')
+    return cleaned
+  }
+
+  // Get cleaned albumId for display and Instagram link
+  const cleanedAlbumId = cleanAlbumId(albumId)
 
   useEffect(() => {
     loadData()
@@ -108,7 +124,7 @@ function AlbumDetail() {
       <div className="page-header">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
           <div>
-            <h1>{album.displayName || albumId}</h1>
+            <h1>{album.displayName || cleanedAlbumId}</h1>
             {album.instagramHandle && <p className="text-muted">{album.instagramHandle}</p>}
           </div>
           <button className="btn btn-secondary" onClick={() => navigate('/albums')}>
@@ -129,10 +145,64 @@ function AlbumDetail() {
                 onClick={() => setShowImage(true)}
               />
               {dominantFace.imagePath && (
-                <p className="text-muted text-sm" style={{ marginTop: '8px' }}>
-                  {dominantFace.imagePath.split(/[\\/]/).pop()}
-                </p>
+                <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {dominantFace.imagePath.startsWith('http://') || dominantFace.imagePath.startsWith('https://') ? (
+                    <a
+                      href={dominantFace.imagePath}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-muted text-sm"
+                      style={{ 
+                        textDecoration: 'none',
+                        color: 'var(--muted)',
+                        wordBreak: 'break-all',
+                        maxWidth: '100%',
+                        display: 'block'
+                      }}
+                      title={dominantFace.imagePath}
+                    >
+                      {dominantFace.imagePath.length > 60 
+                        ? `${dominantFace.imagePath.substring(0, 57)}...` 
+                        : dominantFace.imagePath}
+                    </a>
+                  ) : (
+                    <p className="text-muted text-sm" title={dominantFace.imagePath}>
+                      {dominantFace.imagePath.split(/[\\/]/).pop()}
+                    </p>
+                  )}
+                </div>
               )}
+              {/* Instagram profile link */}
+              {(() => {
+                // Determine Instagram username: 
+                // 1. Use instagramHandle if set
+                // 2. Otherwise use cleaned albumId (with leading/trailing underscores removed)
+                // This works for both __username__ format and plain username format
+                const igUsername = album.instagramHandle || cleanedAlbumId;
+                
+                // Show link if we have a username (always show for Instagram accounts)
+                return igUsername ? (
+                  <div style={{ marginTop: '8px' }}>
+                    <a
+                      href={`https://instagram.com/${igUsername}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        color: '#E4405F',
+                        textDecoration: 'none',
+                        fontSize: '14px',
+                        fontWeight: 500
+                      }}
+                    >
+                      <span>📷</span>
+                      <span>@{igUsername}</span>
+                    </a>
+                  </div>
+                ) : null;
+              })()}
             </div>
           ) : (
             <p className="text-muted">No dominant face available</p>
@@ -325,10 +395,10 @@ function AlbumDetail() {
               </div>
             )}
             <p className="text-muted text-sm">
-              If this album actually represents a single person, you can clear the suspicious flag. Otherwise, consider splitting the album or reviewing the images.
+              If this album actually represents a single person, you can clear the suspicious flag. Otherwise, you can confirm it as an aggregator (it will be hidden from the default albums list) or review the images to split them.
             </p>
           </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button
               className="btn btn-secondary"
               onClick={async () => {
@@ -346,6 +416,24 @@ function AlbumDetail() {
               }}
             >
               Clear Suspicious Flag
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={async () => {
+                if (!confirm('Confirm this album as an aggregator? It will be hidden from the default albums list (you can show it again with a filter).')) {
+                  return
+                }
+                try {
+                  await confirmAggregator(albumId)
+                  alert('Album confirmed as aggregator. It will be hidden from the default albums list.')
+                  loadData()
+                } catch (error) {
+                  console.error('Failed to confirm aggregator:', error)
+                  alert(`Failed to confirm aggregator: ${error.response?.data?.message || error.message}`)
+                }
+              }}
+            >
+              Confirm as Aggregator
             </button>
             <button
               className="btn btn-secondary"
@@ -474,12 +562,48 @@ function AlbumDetail() {
 
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h2 style={{ fontSize: '18px' }}>Actions</h2>
-        </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-secondary" onClick={handleRecompute}>
-            Recompute Album
-          </button>
+          <h2 style={{ fontSize: '18px', marginBottom: '16px' }}>Actions</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={handleRecompute}
+            >
+              Recompute Album
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={async () => {
+                const deleteData = confirm(
+                  'Mark this album as junk/blacklisted?\n\n' +
+                  'This will:\n' +
+                  '- Hide it from all album lists\n' +
+                  '- Hide it from search results\n' +
+                  '- Prevent it from being re-indexed\n\n' +
+                  'Do you also want to DELETE all images and clusters? (Click OK to delete, Cancel to keep data)'
+                )
+                
+                if (!confirm('Are you sure you want to mark this album as junk? This action cannot be easily undone.')) {
+                  return
+                }
+                
+                try {
+                  const result = await markAsJunk(albumId, deleteData)
+                  alert(
+                    `Album marked as junk successfully.\n` +
+                    (deleteData 
+                      ? `Deleted ${result.deletedImages} images and ${result.deletedClusters} clusters.`
+                      : 'Data kept (album is hidden but not deleted).')
+                  )
+                  navigate('/albums') // Navigate away since album is now hidden
+                } catch (error) {
+                  console.error('Failed to mark as junk:', error)
+                  alert(`Failed to mark as junk: ${error.response?.data?.message || error.message}`)
+                }
+              }}
+            >
+              🗑️ Mark as Junk / Blacklist
+            </button>
+          </div>
         </div>
       </div>
 

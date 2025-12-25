@@ -1,8 +1,10 @@
-﻿// Infrastructure/Indexing/SeedingService.cs
+// Infrastructure/Indexing/SeedingService.cs
 using Application.Indexing;
 using Contracts.Indexing;
 using FaceSearch.Infrastructure.Persistence.Mongo;
+using FaceSearch.Infrastructure.Persistence.Mongo.Repositories;
 using Infrastructure.Helpers;
+using Infrastructure.Mongo.Models;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 
@@ -12,10 +14,11 @@ public sealed class SeedingService : ISeedingService
 {
     private readonly IMongoDatabase _db;
     private readonly ILogger<SeedingService> _log;
+    private readonly IAlbumRepository _albums;
 
-    public SeedingService(IMongoDatabase db, ILogger<SeedingService> log)
+    public SeedingService(IMongoDatabase db, ILogger<SeedingService> log, IAlbumRepository albums)
     {
-        _db = db; _log = log;
+        _db = db; _log = log; _albums = albums;
     }
 
     public async Task<SeedResult> SeedDirectoryAsync(SeedDirectoryRequest req, CancellationToken ct = default)
@@ -28,6 +31,14 @@ public sealed class SeedingService : ISeedingService
         var albumId = req.AlbumId ?? (req.DeriveAlbumFromLeaf
             ? new DirectoryInfo(req.DirectoryPath).Name
             : throw new ArgumentException("albumId is required when deriveAlbumFromLeaf=false"));
+
+        // Check if album is blacklisted (junk) - reject if so
+        var existingAlbum = await _albums.GetAsync(albumId, ct);
+        if (existingAlbum != null && existingAlbum.IsJunk)
+        {
+            _log.LogWarning("Album '{AlbumId}' is blacklisted (junk), refusing to seed directory", albumId);
+            throw new InvalidOperationException($"Album '{albumId}' is blacklisted (junk) and cannot be re-indexed. Remove it from the blacklist first if you want to index it again.");
+        }
 
         var imageExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         { ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff" };
@@ -118,21 +129,5 @@ public sealed class SeedingService : ISeedingService
             Succeeded = (int)bulk.ModifiedCount + bulk.Upserts.Count
         };
     }
-
-
-
-    // Mongo model used just for seeding write (matches your ImageDocMongo)
-    private sealed class ImageDoc
-    {
-        public string Id { get; set; } = default!;
-        public string AlbumId { get; set; } = default!;
-        public string AbsolutePath { get; set; } = default!;
-        public string MediaType { get; set; } = "image";
-        public string EmbeddingStatus { get; set; } = "pending";
-        public DateTime CreatedAt { get; set; }
-        public DateTime? EmbeddedAt { get; set; }
-        public string? Error { get; set; }
-        public string? SubjectId { get; set; }
-        public DateTime? TakenAt { get; set; }
-    }
 }
+

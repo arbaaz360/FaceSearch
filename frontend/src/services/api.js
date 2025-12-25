@@ -11,8 +11,8 @@ const api = axios.create({
 })
 
 // Albums
-export const getAlbums = async (skip = 0, take = 20) => {
-  const { data } = await api.get('/albums', { params: { skip, take } })
+export const getAlbums = async (skip = 0, take = 20, includeConfirmedAggregators = false) => {
+  const { data } = await api.get('/albums', { params: { skip, take, includeConfirmedAggregators } })
   return data
 }
 
@@ -43,6 +43,16 @@ export const recomputeAlbum = async (albumId) => {
 
 export const clearSuspiciousFlag = async (albumId) => {
   const { data } = await api.post(`/albums/${albumId}/clear-suspicious`)
+  return data
+}
+
+export const confirmAggregator = async (albumId) => {
+  const { data } = await api.post(`/albums/${albumId}/confirm-aggregator`)
+  return data
+}
+
+export const markAsJunk = async (albumId, deleteData = false) => {
+  const { data } = await api.post(`/albums/${albumId}/mark-junk`, { deleteData })
   return data
 }
 
@@ -78,8 +88,8 @@ export const searchFace = async (file, topK = 30) => {
 }
 
 // Face Review
-export const getUnresolvedFaces = async (take = 100) => {
-  const { data } = await api.get('/faces/unresolved', { params: { take } })
+export const getUnresolvedFaces = async (skip = 0, take = 20) => {
+  const { data } = await api.get('/faces/unresolved', { params: { skip, take } })
   return data
 }
 
@@ -108,6 +118,41 @@ export const seedDirectory = async (directoryPath, albumId, includeVideos = fals
   return data
 }
 
+// Instagram Ingestion
+export const seedInstagram = async (request) => {
+  const { data } = await api.post('/instagram/seed', request)
+  return data
+}
+
+export const getInstagramStatus = async (targetUsername = null, followingUsername = null) => {
+  const params = {}
+  if (targetUsername) params.targetUsername = targetUsername
+  if (followingUsername) params.followingUsername = followingUsername
+  const { data } = await api.get('/instagram/status', { params })
+  return data
+}
+
+export const resetInstagramIngestion = async (targetUsername = null, followingUsername = null, deleteImages = false) => {
+  const { data } = await api.post('/instagram/reset', null, {
+    params: {
+      ...(targetUsername ? { targetUsername } : {}),
+      ...(followingUsername ? { followingUsername } : {}),
+      deleteImages,
+    },
+  })
+  return data
+}
+
+export const resetSingleInstagramAccount = async (username, deleteImages = false) => {
+  const { data } = await api.post('/instagram/reset', null, {
+    params: {
+      followingUsername: username,
+      deleteImages,
+    },
+  })
+  return data
+}
+
 // Diagnostics
 export const getAlbumStatus = async (albumId) => {
   const { data } = await axios.get(`${DIAGNOSTICS_BASE}/album-status/${albumId}`)
@@ -123,6 +168,11 @@ export const resetErrors = async (albumId = null) => {
   const { data } = await axios.post(`${DIAGNOSTICS_BASE}/reset-errors`, null, {
     params: albumId ? { albumId } : {},
   })
+  return data
+}
+
+export const getProcessingStats = async () => {
+  const { data } = await axios.get(`${DIAGNOSTICS_BASE}/processing-stats`)
   return data
 }
 

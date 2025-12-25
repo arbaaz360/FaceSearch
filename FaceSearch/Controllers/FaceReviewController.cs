@@ -51,9 +51,13 @@ public sealed class FaceReviewController : ControllerBase
     /// List unresolved faces awaiting review (from Mongo face_reviews).
     /// </summary>
     [HttpGet("unresolved")]
-    public async Task<ActionResult<IReadOnlyList<FaceReviewSummary>>> ListUnresolved([FromQuery] int take = 100, CancellationToken ct = default)
+    public async Task<ActionResult<FaceReviewListResponse>> ListUnresolved([FromQuery] int skip = 0, [FromQuery] int take = 20, CancellationToken ct = default)
     {
-        var docs = await _faceReviews.ListUnresolvedAsync(take, ct);
+        take = Math.Clamp(take <= 0 ? 20 : take, 1, 100);
+        skip = Math.Max(0, skip);
+        
+        var docs = await _faceReviews.GetPendingAsync(skip, take, ct);
+        var total = await _faceReviews.GetPendingCountAsync(ct);
         var list = docs.Select(d => new FaceReviewSummary
         {
             FaceId = d.Id,
@@ -74,7 +78,14 @@ public sealed class FaceReviewController : ControllerBase
                 Bbox = m.Bbox
             }).ToArray() ?? Array.Empty<FaceReviewMemberDto>()
         }).ToArray();
-        return Ok(list);
+        
+        return Ok(new FaceReviewListResponse
+        {
+            Faces = list,
+            Total = total,
+            Skip = skip,
+            Take = take
+        });
     }
 
     /// <summary>
@@ -1053,6 +1064,14 @@ public sealed class FaceReviewController : ControllerBase
                 ct);
         }
     }
+}
+
+public sealed class FaceReviewListResponse
+{
+    public required FaceReviewSummary[] Faces { get; set; }
+    public int Total { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
 }
 
 public sealed class FaceReviewResponse

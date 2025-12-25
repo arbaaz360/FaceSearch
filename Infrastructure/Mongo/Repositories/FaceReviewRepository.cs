@@ -44,6 +44,13 @@ public sealed class FaceReviewRepository : IFaceReviewRepository
         return docs;
     }
 
+    public async Task<int> GetPendingCountAsync(CancellationToken ct = default)
+    {
+        var filter = Builders<FaceReviewMongo>.Filter.Eq(x => x.Resolved, false);
+        var count = await _col.CountDocumentsAsync(filter, cancellationToken: ct);
+        return (int)count;
+    }
+
     public async Task<IReadOnlyList<FaceReviewMongo>> GetPendingByGroupAsync(string groupId, CancellationToken ct = default)
     {
         var filter = Builders<FaceReviewMongo>.Filter.And(

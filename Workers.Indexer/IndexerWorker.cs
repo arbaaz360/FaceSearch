@@ -5,6 +5,7 @@ using FaceSearch.Infrastructure.Qdrant;
 using FaceSearch.Services.Implementations;
 using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
+using System.Net.Http;
 
 namespace FaceSearch.Workers.Indexer
 {
@@ -19,6 +20,7 @@ namespace FaceSearch.Workers.Indexer
         private readonly IndexerOptions _opts;
         private readonly AlbumFinalizerService _albumDominance;
         private readonly AlbumReviewService _albumrewviews;
+        private readonly HttpClient _httpClient; // Shared HttpClient for image downloads
 
         public IndexerWorker(
             ILogger<IndexerWorker> log,
@@ -30,7 +32,8 @@ namespace FaceSearch.Workers.Indexer
              AlbumFinalizerService albumDominance,
             IOptions<IndexerOptions> opts,
             IAlbumClusterRepository albumClusters,
-            AlbumReviewService albumReviewService)
+            AlbumReviewService albumReviewService,
+            IHttpClientFactory httpClientFactory)
         {
             _log = log;
             _images = images;
@@ -41,6 +44,16 @@ namespace FaceSearch.Workers.Indexer
             _opts = opts.Value;
             _albumDominance = albumDominance;
             _albumrewviews = albumReviewService;
+            
+            // Create shared HttpClient for image downloads with proper timeout
+            _httpClient = httpClientFactory.CreateClient();
+            _httpClient.Timeout = TimeSpan.FromMinutes(2); // 2 minute timeout per download
+        }
+
+        public override async Task StopAsync(CancellationToken cancellationToken)
+        {
+            _httpClient?.Dispose();
+            await base.StopAsync(cancellationToken);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -76,10 +89,58 @@ namespace FaceSearch.Workers.Indexer
                         },
                         async (img, ct) =>
                         {
+                            // Per-image timeout: 3 minutes total (download + embedding)
+                            using var perImageCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                            perImageCts.CancelAfter(TimeSpan.FromMinutes(3));
+                            var imageCt = perImageCts.Token;
+
+                            Stream? imageStream = null;
+                            string? tempFilePath = null;
                             try
                             {
-                                if (!File.Exists(img.AbsolutePath))
-                                    throw new FileNotFoundException("File not found", img.AbsolutePath);
+                                // Check if AbsolutePath is a URL or file path
+                                var isUrl = img.AbsolutePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                                           img.AbsolutePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+                                string? fileName = null;
+                                if (isUrl)
+                                {
+                                    // Download from URL to temporary file
+                                    // Parse URL to extract filename without query parameters
+                                    if (Uri.TryCreate(img.AbsolutePath, UriKind.Absolute, out var uri))
+                                    {
+                                        var urlPath = uri.AbsolutePath; // Gets path without query string
+                                        fileName = Path.GetFileName(urlPath);
+                                        if (string.IsNullOrWhiteSpace(fileName) || !fileName.Contains('.'))
+                                        {
+                                            // Fallback: try to get extension from content-type or use default
+                                            fileName = "image.jpg";
+                                        }
+                                    }
+                                    else
+                                    {
+                                        fileName = "image.jpg";
+                                    }
+
+                                    // Use shared HttpClient instead of creating new one per image
+                                    _log.LogDebug("Downloading image {Id} from {Url}", img.Id, img.AbsolutePath);
+                                    var imageBytes = await _httpClient.GetByteArrayAsync(img.AbsolutePath, imageCt);
+                                    
+                                    // Sanitize filename: remove invalid characters
+                                    var sanitizedFileName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
+                                    tempFilePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}_{sanitizedFileName}");
+                                    await System.IO.File.WriteAllBytesAsync(tempFilePath, imageBytes, imageCt);
+                                    imageStream = new FileStream(tempFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16, FileOptions.SequentialScan | FileOptions.DeleteOnClose);
+                                    _log.LogDebug("Downloaded image {Id} ({Size} bytes)", img.Id, imageBytes.Length);
+                                }
+                                else
+                                {
+                                    // Use file path directly
+                                    if (!File.Exists(img.AbsolutePath))
+                                        throw new FileNotFoundException("File not found", img.AbsolutePath);
+                                    fileName = Path.GetFileName(img.AbsolutePath);
+                                    imageStream = new FileStream(img.AbsolutePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16, FileOptions.SequentialScan);
+                                }
 
                                 var pointId = DeterministicGuid.FromString(img.Id).ToString();
                                 imageToPoint[img.Id] = pointId;
@@ -99,11 +160,8 @@ namespace FaceSearch.Workers.Indexer
                                 // ---- CLIP ----
                                 if (_opts.EnableClip)
                                 {
-                                    await using var clipFs = new FileStream(
-                                        img.AbsolutePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                                        1 << 16, FileOptions.SequentialScan);
-
-                                    var clipVec = await _embedder.EmbedImageAsync(clipFs, Path.GetFileName(img.AbsolutePath), ct);
+                                    imageStream.Position = 0; // Reset stream position
+                                    var clipVec = await _embedder.EmbedImageAsync(imageStream, fileName, imageCt);
                                     if (clipVec is { Length: > 0 })
                                     {
                                         L2NormalizeInPlace(clipVec);
@@ -115,25 +173,18 @@ namespace FaceSearch.Workers.Indexer
                                 // ---- FACE ----
                                 if (_opts.EnableFace)
                                 {
-                                    await using var faceFs = new FileStream(
-                                        img.AbsolutePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                                        1 << 16, FileOptions.SequentialScan);
-
-                                    var faceVec = await _embedder.EmbedFaceAsync(faceFs, Path.GetFileName(img.AbsolutePath), ct);
+                                    imageStream.Position = 0; // Reset stream position
+                                    var faceVec = await _embedder.EmbedFaceAsync(imageStream, fileName, imageCt);
                                     if (faceVec is { Length: > 0 })
                                     {
                                         L2NormalizeInPlace(faceVec);
-                                        await _images.SetHasPeopleAsync(img.Id, true, ct);
-
+                                        await _images.SetHasPeopleAsync(img.Id, true, imageCt);
                                         var payload = new Dictionary<string, object?>(basePayload);
-                                        // NOTE: do NOT set albumClusterId here anymore
+                                        // NOTE: do NOT set albumClusterId here anymore - it will be set later during batch processing
                                         // payload["albumClusterId"] = null;
 
-                                        await _upsert.UpsertAsync(
-                                            _qopts.FaceCollection,
-                                            new[] { (imageToPoint[img.Id], faceVec, (IDictionary<string, object?>)payload) },
-                                            ct);
-
+                                        // Add to facePoints collection for batch processing (clusterId enrichment happens later)
+                                        facePoints.Add((pointId, faceVec, payload));
                                         producedAny = true;
                                     }
                                 }
@@ -141,12 +192,29 @@ namespace FaceSearch.Workers.Indexer
                                 if (producedAny)
                                     readyImageIds.TryAdd(img.Id, img.AlbumId);
                                 else
-                                    await _images.MarkErrorAsync(img.Id, "No vectors produced", ct);
+                                    await _images.MarkErrorAsync(img.Id, "No vectors produced", imageCt);
+                            }
+                            catch (OperationCanceledException) when (perImageCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                            {
+                                // Per-image timeout occurred
+                                var errorMsg = "Processing timeout (exceeded 3 minutes)";
+                                _log.LogWarning("Image {Id} timed out during processing", img.Id);
+                                try { await _images.MarkErrorAsync(img.Id, errorMsg, ct); } catch { /* ignore */ }
                             }
                             catch (Exception ex)
                             {
-                                _log.LogError(ex, "Failed to index image {Id}", img.Id);
-                                try { await _images.MarkErrorAsync(img.Id, ex.Message, ct); } catch { /* ignore */ }
+                                _log.LogError(ex, "Failed to index image {Id}: {Error}", img.Id, ex.Message);
+                                try { await _images.MarkErrorAsync(img.Id, ex.Message.Length > 200 ? ex.Message.Substring(0, 200) : ex.Message, ct); } catch { /* ignore */ }
+                            }
+                            finally
+                            {
+                                imageStream?.Dispose();
+                                // Clean up temp file if it exists
+                                if (tempFilePath != null && System.IO.File.Exists(tempFilePath))
+                                {
+                                    try { System.IO.File.Delete(tempFilePath); }
+                                    catch { /* ignore cleanup errors */ }
+                                }
                             }
                         });
 

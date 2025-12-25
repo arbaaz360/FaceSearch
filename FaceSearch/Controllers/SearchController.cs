@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using System.Text.Json;
 using System.Drawing;
+using Infrastructure.Mongo.Models;
+using MongoDB.Driver;
 
 namespace FaceSearch.Api.Controllers;
 
@@ -20,13 +22,15 @@ public sealed class SearchController : ControllerBase
     private readonly IQdrantClient _qdrant;
     private readonly IConfiguration _cfg;
     private readonly IImageRepository _imageRepo;
+    private readonly IMongoContext _mongo;
 
-    public SearchController(ISearchService search, IQdrantClient qdrant, IConfiguration cfg, IImageRepository imageRepo)
+    public SearchController(ISearchService search, IQdrantClient qdrant, IConfiguration cfg, IImageRepository imageRepo, IMongoContext mongo)
     {
         _search = search;
         _qdrant = qdrant;
         _cfg = cfg;
         _imageRepo = imageRepo;
+        _mongo = mongo;
     }
 
     // ------------------------------ TEXT ------------------------------------
@@ -193,9 +197,45 @@ public sealed class SearchController : ControllerBase
                 .Where(h => minScore is null || h.Score >= minScore.Value)
                 .ToList();
 
+            // Get albumIds from hits and check which ones are junk
+            var albumIds = filteredHits
+                .Select(h =>
+                {
+                    var payload = h.Payload is not null
+                        ? new Dictionary<string, object?>(h.Payload, StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    return Get(payload, "albumId", "AlbumId", "album_id");
+                })
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct()
+                .ToList();
+
+            // Check which albums are junk (blacklisted)
+            var junkAlbumIds = new HashSet<string>();
+            if (albumIds.Count > 0)
+            {
+                var albums = await _mongo.Albums.Find(
+                    Builders<AlbumMongo>.Filter.In(x => x.Id, albumIds) &
+                    Builders<AlbumMongo>.Filter.Eq(x => x.IsJunk, true))
+                    .ToListAsync(ct);
+                junkAlbumIds = albums.Select(a => a.Id).ToHashSet();
+            }
+
+            // Filter out junk albums before processing
+            var validHits = filteredHits
+                .Where(h =>
+                {
+                    var payload = h.Payload is not null
+                        ? new Dictionary<string, object?>(h.Payload, StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    var albumId = Get(payload, "albumId", "AlbumId", "album_id");
+                    return string.IsNullOrWhiteSpace(albumId) || !junkAlbumIds.Contains(albumId);
+                })
+                .ToList();
+
             var resp = new FaceSearchResponse
             {
-                Results = await Task.WhenAll(filteredHits.Select(async h =>
+                Results = await Task.WhenAll(validHits.Select(async h =>
                 {
                     // wrap payload as CI for safe access
                     var payload = h.Payload is not null

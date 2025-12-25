@@ -49,6 +49,28 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo.Repositories
             var update = Builders<AlbumMongo>.Update
                 .Set(x => x.SuspiciousAggregator, suspiciousAggregator)
                 .Set(x => x.UpdatedAt, updatedAt);
+            
+            // If clearing suspicious flag, also clear confirmed flag
+            if (!suspiciousAggregator)
+            {
+                update = update.Set(x => x.AggregatorConfirmed, false);
+            }
+
+            return _col.UpdateOneAsync(
+                x => x.Id == albumId,
+                update,
+                new UpdateOptions { IsUpsert = false },
+                ct);
+        }
+
+        public Task UpdateMaleAccountFlagAsync(
+            string albumId,
+            bool isMaleAccount,
+            CancellationToken ct = default)
+        {
+            var update = Builders<AlbumMongo>.Update
+                .Set(x => x.IsMaleAccount, isMaleAccount)
+                .Set(x => x.UpdatedAt, DateTime.UtcNow);
 
             return _col.UpdateOneAsync(
                 x => x.Id == albumId,

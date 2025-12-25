@@ -68,6 +68,36 @@ public sealed class QdrantSearchClient
         _log.LogInformation("Qdrant collection {Name} deleted successfully", name);
     }
 
+    /// <summary>
+    /// Delete points from a collection by filter (e.g., by albumId).
+    /// </summary>
+    public async Task DeletePointsByFilterAsync(string collection, object filter, CancellationToken ct = default)
+    {
+        var url = $"/collections/{Uri.EscapeDataString(collection)}/points/delete?wait=true";
+        
+        var body = new
+        {
+            filter = filter
+        };
+
+        using var resp = await _http.PostAsJsonAsync(url, body, ct);
+        
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            _log.LogWarning("Qdrant collection {Collection} not found for point deletion", collection);
+            return;
+        }
+        
+        if (!resp.IsSuccessStatusCode)
+        {
+            var err = await resp.Content.ReadAsStringAsync(ct);
+            _log.LogError("Qdrant DeletePointsByFilter failed ({Status}): {Body}", resp.StatusCode, err);
+            resp.EnsureSuccessStatusCode();
+        }
+
+        _log.LogInformation("Deleted points from Qdrant collection {Collection} by filter", collection);
+    }
+
     public async Task<Dictionary<string, object?>?> GetPointPayloadAsync(string collection, string pointId, CancellationToken ct = default)
     {
         var url = $"/collections/{Uri.EscapeDataString(collection)}/points/{Uri.EscapeDataString(pointId)}";
@@ -119,4 +149,16 @@ public sealed class QdrantPoint
     public float score { get; init; }
     public string? id { get; init; }
     public Dictionary<string, object>? payload { get; init; }
+}
+
+internal sealed class QdrantDeleteResponse
+{
+    public QdrantDeleteResult? result { get; init; }
+    public string? status { get; init; }
+    public double? time { get; init; }
+}
+
+internal sealed class QdrantDeleteResult
+{
+    public long? operation_id { get; init; }
 }

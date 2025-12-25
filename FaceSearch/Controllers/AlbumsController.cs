@@ -12,6 +12,7 @@ using MongoDB.Driver;
 using System.Drawing;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 
 [ApiController]
 [Route("api/albums")]
@@ -58,9 +59,82 @@ public sealed class AlbumsController : ControllerBase
 
         await _albums.SetSuspiciousAggregatorAsync(albumId, false, DateTime.UtcNow, ct);
         album.SuspiciousAggregator = false;
+        album.AggregatorConfirmed = false;
         album.UpdatedAt = DateTime.UtcNow;
 
         return Ok(album);
+    }
+
+    /// <summary>
+    /// Confirm that an album is an aggregator (contains multiple people).
+    /// This will mark it as confirmed and it will be filtered from default album lists.
+    /// </summary>
+    [HttpPost("{albumId}/confirm-aggregator")]
+    public async Task<ActionResult<AlbumMongo>> ConfirmAggregator(string albumId, CancellationToken ct)
+    {
+        var album = await _albums.GetAsync(albumId, ct);
+        if (album is null) return NotFound();
+
+        var update = Builders<AlbumMongo>.Update
+            .Set(x => x.AggregatorConfirmed, true)
+            .Set(x => x.UpdatedAt, DateTime.UtcNow);
+        await _ctx.Albums.UpdateOneAsync(
+            Builders<AlbumMongo>.Filter.Eq(x => x.Id, albumId),
+            update,
+            cancellationToken: ct);
+
+        album.AggregatorConfirmed = true;
+        album.UpdatedAt = DateTime.UtcNow;
+
+        return Ok(album);
+    }
+
+    /// <summary>
+    /// Mark an album as junk/blacklisted. This will:
+    /// - Hide it from all album lists
+    /// - Hide it from search results
+    /// - Prevent it from being re-indexed in the future
+    /// Optionally deletes all images and clusters associated with the album.
+    /// </summary>
+    [HttpPost("{albumId}/mark-junk")]
+    public async Task<ActionResult<MarkJunkResponse>> MarkAsJunk(string albumId, [FromBody] MarkJunkRequest? request = null, CancellationToken ct = default)
+    {
+        var album = await _albums.GetAsync(albumId, ct);
+        if (album is null) return NotFound();
+
+        var deleteData = request?.DeleteData ?? false;
+        var response = new MarkJunkResponse { AlbumId = albumId, DeletedImages = 0, DeletedClusters = 0 };
+
+        // Mark as junk
+        var update = Builders<AlbumMongo>.Update
+            .Set(x => x.IsJunk, true)
+            .Set(x => x.UpdatedAt, DateTime.UtcNow);
+        await _ctx.Albums.UpdateOneAsync(
+            Builders<AlbumMongo>.Filter.Eq(x => x.Id, albumId),
+            update,
+            cancellationToken: ct);
+
+        // Optionally delete images and clusters
+        if (deleteData)
+        {
+            // Delete images
+            var imagesDeleted = await _ctx.Images.DeleteManyAsync(
+                Builders<ImageDocMongo>.Filter.Eq(x => x.AlbumId, albumId),
+                cancellationToken: ct);
+            response.DeletedImages = (int)imagesDeleted.DeletedCount;
+
+            // Delete clusters
+            var clustersDeleted = await _ctx.AlbumClusters.DeleteManyAsync(
+                Builders<AlbumClusterMongo>.Filter.Eq(x => x.AlbumId, albumId),
+                cancellationToken: ct);
+            response.DeletedClusters = (int)clustersDeleted.DeletedCount;
+
+            // Note: Qdrant vectors are not deleted here - they can be cleaned up separately if needed
+            // The albumId in Qdrant payloads will still reference the blacklisted album, but
+            // search results will be filtered out by checking IsJunk flag
+        }
+
+        return Ok(response);
     }
 
     /// <summary>
@@ -99,7 +173,7 @@ public sealed class AlbumsController : ControllerBase
                         var payload = await _qdrant.GetPointPayloadAsync(_qdrantOptions.FaceCollection, candidateFaceId, ct);
                         if (payload != null)
                         {
-                            var preview = TryPreviewFromPayload(payload);
+                            var preview = await TryPreviewFromPayloadAsync(payload);
                             if (preview != null)
                             {
                                 previewBase64 = preview;
@@ -147,15 +221,27 @@ public sealed class AlbumsController : ControllerBase
 
     /// <summary>
     /// List albums with basic info and optional preview thumbnail (best-effort from Qdrant payload path).
+    /// By default, filters out confirmed aggregators. Set includeConfirmedAggregators=true to include them.
     /// </summary>
     [HttpGet]
-    public async Task<ActionResult<AlbumListResponse>> List([FromQuery] int skip = 0, [FromQuery] int take = 20, CancellationToken ct = default)
+    public async Task<ActionResult<AlbumListResponse>> List([FromQuery] int skip = 0, [FromQuery] int take = 20, [FromQuery] bool includeConfirmedAggregators = false, CancellationToken ct = default)
     {
         take = Math.Clamp(take <= 0 ? 20 : take, 1, 100);
         skip = Math.Max(0, skip);
 
-        var total = await _ctx.Albums.CountDocumentsAsync(_ => true, cancellationToken: ct);
-        var docs = await _ctx.Albums.Find(_ => true)
+        // Filter out confirmed aggregators and junk albums by default
+        // Use $ne (not equal) to match both false and missing fields
+        var filter = Builders<AlbumMongo>.Filter.Ne(x => x.IsJunk, true); // Exclude junk (matches false or missing)
+        
+        if (!includeConfirmedAggregators)
+        {
+            filter = Builders<AlbumMongo>.Filter.And(
+                filter,
+                Builders<AlbumMongo>.Filter.Ne(x => x.AggregatorConfirmed, true)); // Exclude confirmed aggregators (matches false or missing)
+        }
+
+        var total = await _ctx.Albums.CountDocumentsAsync(filter, cancellationToken: ct);
+        var docs = await _ctx.Albums.Find(filter)
             .SortByDescending(a => a.UpdatedAt)
             .Skip(skip)
             .Limit(take)
@@ -172,7 +258,7 @@ public sealed class AlbumsController : ControllerBase
                 {
                     var faceId = a.DominantSubject!.SampleFaceId!;
                     var payload = await _qdrant.GetPointPayloadAsync(_qdrantOptions.FaceCollection, faceId, ct);
-                    return (a.Id, Preview: TryPreviewFromPayload(payload));
+                    return (a.Id, Preview: await TryPreviewFromPayloadAsync(payload));
                 }
                 catch
                 {
@@ -338,7 +424,7 @@ public sealed class AlbumsController : ControllerBase
             });
         }
 
-        var preview = TryPreviewFromPayload(payload);
+        var preview = await TryPreviewFromPayloadAsync(payload);
         return Ok(new DominantFaceResponse
         {
             AlbumId = albumId,
@@ -360,7 +446,7 @@ public sealed class AlbumsController : ControllerBase
         };
     }
 
-    private static string? TryPreviewFromPayload(IReadOnlyDictionary<string, object?>? payload)
+    private static async Task<string?> TryPreviewFromPayloadAsync(IReadOnlyDictionary<string, object?>? payload)
     {
 #pragma warning disable CA1416 // Drawing APIs are Windows-only
         try
@@ -369,29 +455,81 @@ public sealed class AlbumsController : ControllerBase
             if (!payload.TryGetValue("absolutePath", out var raw) && !payload.TryGetValue("path", out raw))
                 return null;
             var path = raw?.ToString();
-            if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+            if (string.IsNullOrWhiteSpace(path))
             {
-                System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: File does not exist: {path}");
+                System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: Path is null or empty");
                 return null;
             }
-            
-            System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: Attempting to load image: {path}");
-            using var src = new System.Drawing.Bitmap(path);
-            const int maxSide = 256;
-            var scale = Math.Min((double)maxSide / src.Width, (double)maxSide / src.Height);
-            if (scale > 1) scale = 1;
-            var w = Math.Max(1, (int)(src.Width * scale));
-            var h = Math.Max(1, (int)(src.Height * scale));
-            using var resized = new System.Drawing.Bitmap(w, h);
-            using (var g = System.Drawing.Graphics.FromImage(resized))
+
+            // Check if path is a URL
+            var isUrl = path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                       path.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+            string? tempFilePath = null;
+            System.Drawing.Bitmap? src = null;
+
+            try
             {
-                g.DrawImage(src, 0, 0, w, h);
+                if (isUrl)
+                {
+                    // Download from URL to temporary file
+                    System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: Downloading image from URL: {path}");
+                    using var httpClient = new System.Net.Http.HttpClient();
+                    httpClient.Timeout = TimeSpan.FromSeconds(30);
+                    var imageBytes = await httpClient.GetByteArrayAsync(path);
+                    
+                    // Create temporary file
+                    tempFilePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.jpg");
+                    await System.IO.File.WriteAllBytesAsync(tempFilePath, imageBytes);
+                    
+                    // Load from temporary file
+                    src = new System.Drawing.Bitmap(tempFilePath);
+                    System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: Successfully downloaded and loaded image from URL");
+                }
+                else
+                {
+                    // Use local file path
+                    if (!System.IO.File.Exists(path))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: File does not exist: {path}");
+                        return null;
+                    }
+                    System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: Attempting to load image: {path}");
+                    src = new System.Drawing.Bitmap(path);
+                }
+
+                const int maxSide = 256;
+                var scale = Math.Min((double)maxSide / src.Width, (double)maxSide / src.Height);
+                if (scale > 1) scale = 1;
+                var w = Math.Max(1, (int)(src.Width * scale));
+                var h = Math.Max(1, (int)(src.Height * scale));
+                using var resized = new System.Drawing.Bitmap(w, h);
+                using (var g = System.Drawing.Graphics.FromImage(resized))
+                {
+                    g.DrawImage(src, 0, 0, w, h);
+                }
+                using var ms = new MemoryStream();
+                resized.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
+                var result = "data:image/jpeg;base64," + Convert.ToBase64String(ms.ToArray());
+                System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: Successfully generated preview (size: {result.Length} chars)");
+                return result;
             }
-            using var ms = new MemoryStream();
-            resized.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
-            var result = "data:image/jpeg;base64," + Convert.ToBase64String(ms.ToArray());
-            System.Diagnostics.Debug.WriteLine($"AlbumsController.TryPreviewFromPayload: Successfully generated preview for {path} (size: {result.Length} chars)");
-            return result;
+            finally
+            {
+                src?.Dispose();
+                // Clean up temporary file if we created one
+                if (tempFilePath != null && System.IO.File.Exists(tempFilePath))
+                {
+                    try
+                    {
+                        System.IO.File.Delete(tempFilePath);
+                    }
+                    catch
+                    {
+                        // Ignore cleanup errors
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -420,6 +558,19 @@ public sealed class UpdateAlbumIdentityRequest
 public sealed class TagRequest
 {
     public List<string>? Tags { get; set; }
+}
+
+public sealed class MarkJunkRequest
+{
+    public bool DeleteData { get; set; } = false;  // If true, deletes images and clusters
+}
+
+public sealed class MarkJunkResponse
+{
+    public string AlbumId { get; set; } = default!;
+    public int DeletedImages { get; set; }
+    public int DeletedClusters { get; set; }
+    public string Message { get; set; } = "Album marked as junk and hidden from all views";
 }
 
 public sealed class AlbumListResponse

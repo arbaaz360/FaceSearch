@@ -36,6 +36,9 @@ public static class WorkerComposition
         services.AddHttpClient<QdrantSearchClient>(c => c.BaseAddress = new Uri(qdrantBase));
         services.AddHttpClient<IQdrantUpsert, QdrantUpsert>(c => c.BaseAddress = new Uri(qdrantBase));
 
+        // -------- HttpClient for image downloads --------
+        services.AddHttpClient(); // Register IHttpClientFactory
+
         // -------- Mongo --------
         services.AddSingleton<IMongoContext, MongoContext>();
         services.AddSingleton<IMongoDatabase>(sp => sp.GetRequiredService<IMongoContext>().Database);

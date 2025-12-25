@@ -1,6 +1,6 @@
 # FaceSearch
 
-A production-ready facial recognition and image search system that indexes images, detects faces, and enables similarity search using vector embeddings. Built with .NET 8, Python, MongoDB, and Qdrant.
+A production-ready facial recognition and image search system that indexes images, detects faces, and enables similarity search using vector embeddings. Built with .NET 8, Python, MongoDB, Qdrant, and React.
 
 ## 📋 Table of Contents
 
@@ -10,6 +10,7 @@ A production-ready facial recognition and image search system that indexes image
 - [System Components](#system-components)
 - [Database Structure](#database-structure)
 - [API Endpoints](#api-endpoints)
+- [Frontend](#frontend)
 - [Workflows](#workflows)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
@@ -26,16 +27,21 @@ FaceSearch is a hybrid system that combines:
 - **Face Recognition**: InsightFace (ArcFace) for face embeddings
 - **Image Search**: OpenCLIP for semantic image/text search
 - **Review Workflow**: Manual identity resolution for detected faces
+- **Modern UI**: React-based frontend for managing albums, reviews, and searches
 
 ### Key Features
 
 - ✅ **Face Detection & Recognition**: Automatic face detection with gender filtering (female-only)
-- ✅ **Multi-Modal Search**: Text, image, and face similarity search
+- ✅ **Multi-Modal Search**: Text, image, and face similarity search with thumbnail previews
 - ✅ **Identity Management**: Album-based person identification with clustering
-- ✅ **Review Workflow**: Staged review system for unresolved faces
+- ✅ **Review Workflow**: Staged review system for unresolved faces and album-level reviews
 - ✅ **Bulk Processing**: Directory scanning with automatic clustering
 - ✅ **Aggregator Detection**: Identifies accounts with multiple different people
+- ✅ **Duplicate Album Detection**: Automatic detection of similar albums with merge candidate flagging
+- ✅ **Album Merging**: Merge duplicate albums with automatic data migration
+- ✅ **Preview Thumbnails**: Base64-encoded JPEG thumbnails for search results and albums
 - ✅ **GPU Acceleration**: Supports CUDA, DirectML, and CPU backends
+- ✅ **React Frontend**: Modern web UI for all operations
 
 ---
 
@@ -45,6 +51,11 @@ FaceSearch is a hybrid system that combines:
 
 ```
 ┌─────────────────┐
+│  React Frontend │  ← Modern Web UI (Port 3000)
+│   (Vite + React)│
+└────────┬────────┘
+         │
+┌────────▼────────┐
 │   .NET API      │  ← REST API (FaceSearch)
 │   (Port 5240)   │
 └────────┬────────┘
@@ -69,7 +80,7 @@ FaceSearch is a hybrid system that combines:
 
 1. **Image Indexing**:
    ```
-   Images → MongoDB (pending) → Worker → Embedder → Qdrant (vectors) → MongoDB (done)
+   Images → MongoDB (pending) → Worker → Embedder → Qdrant (vectors) → MongoDB (done) → Album Finalization
    ```
 
 2. **Face Review**:
@@ -79,7 +90,7 @@ FaceSearch is a hybrid system that combines:
 
 3. **Search**:
    ```
-   Query → Embedder (vector) → Qdrant (similarity) → MongoDB (metadata) → Results
+   Query → Embedder (vector) → Qdrant (similarity) → MongoDB (metadata) → Generate Previews → Results
    ```
 
 ---
@@ -95,6 +106,7 @@ FaceSearch is a hybrid system that combines:
 | **Embedder** | Python 3.11 + FastAPI | Vector embeddings (CLIP + InsightFace) |
 | **Vector DB** | Qdrant v1.10.0 | Similarity search |
 | **Metadata DB** | MongoDB 6 | Document storage |
+| **Frontend** | React 18 + Vite | Modern web UI |
 
 ### ML Models
 
@@ -116,27 +128,42 @@ FaceSearch is a hybrid system that combines:
 ### 1. .NET API (`FaceSearch/`)
 
 Main REST API service providing:
-- Search endpoints (text, image, face)
+- Search endpoints (text, image, face) with thumbnail previews
 - Face review workflow
-- Album management
+- Album management with cluster visualization
 - Directory scanning
 - Health & diagnostics
+- Review system (merge candidates, aggregators)
 
 **Port**: `5240`  
 **Swagger UI**: `http://localhost:5240/swagger`
 
-### 2. .NET Worker (`Workers.Indexer/`)
+### 2. React Frontend (`frontend/`)
+
+Modern web application providing:
+- Albums page with thumbnails and merge candidate management
+- Album detail page with top clusters visualization
+- Search page with text, image, and face search (with thumbnails)
+- Face review page for resolving unresolved faces
+- Indexing page for directory seeding
+- Diagnostics page for system management
+- Reviews page for managing album-level reviews
+
+**Port**: `3000` (development)  
+**URL**: `http://localhost:3000`
+
+### 3. .NET Worker (`Workers.Indexer/`)
 
 Background service that:
 - Polls MongoDB for pending images
-- Generates CLIP and face embeddings
+- Generates CLIP and face embeddings (configurable)
 - Upserts vectors to Qdrant
 - Assigns faces to album clusters
-- Triggers album finalization
+- Triggers album finalization (dominance, aggregator detection, merge candidate detection)
 
 **Runs**: Continuously in background
 
-### 3. Python Embedder (`embedder/`)
+### 4. Python Embedder (`embedder/`)
 
 FastAPI service providing:
 - `/embed/text` - Text to CLIP vector
@@ -147,19 +174,19 @@ FastAPI service providing:
 **Port**: `8090`  
 **GPU Backends**: DirectML (default), CUDA, CPU
 
-### 4. MongoDB
+### 5. MongoDB
 
 Document database storing:
 - Image metadata and status
 - Album identities
 - Face clusters
-- Review queue
-- Review records
+- Review queue (face_reviews)
+- Review records (reviews)
 
 **Port**: `27017`  
 **Database**: `facesearch`
 
-### 5. Qdrant
+### 6. Qdrant
 
 Vector database storing:
 - CLIP embeddings (image/text search)
@@ -221,6 +248,8 @@ Represents a person/identity.
   }?,
   SuspiciousAggregator: bool,
   isSuspectedMergeCandidate: bool,
+  existingSuspectedDuplicateAlbumId: string?,
+  existingSuspectedDuplicateClusterId: string?,
   UpdatedAt: DateTime
 }
 ```
@@ -264,6 +293,7 @@ Unresolved faces awaiting manual review.
   ThumbnailBase64: string?,
   Vector512: float[],       // Face embedding
   Bbox: int[]?,             // [x1, y1, x2, y2]
+  AbsolutePath: string?,
   CreatedAt: DateTime
 }
 ```
@@ -277,10 +307,17 @@ Album-level reviews (aggregator detection, merge candidates).
   Type: "AggregatorAlbum" | "AlbumMerge",
   Status: "pending" | "approved" | "rejected",
   AlbumId: string?,
+  AlbumB: string?,          // For merge reviews
   ClusterId: string?,
+  Similarity: double?,       // For merge reviews
+  Ratio: double?,           // For aggregator reviews
+  Notes: string?,
   CreatedAt: DateTime
 }
 ```
+
+**Indexes**:
+- `ux_pending_review`: Unique partial index on (Type, Status, AlbumId, ClusterId) where Status = "pending"
 
 ### Qdrant Collections
 
@@ -296,7 +333,8 @@ CLIP embeddings for image/text search.
   "albumId": "album-id",
   "absolutePath": "/path/to/image.jpg",
   "takenAt": "2024-01-01T00:00:00Z",
-  "mediaType": "image"
+  "mediaType": "image",
+  "subjectId": "optional"
 }
 ```
 
@@ -309,6 +347,7 @@ Resolved face embeddings (known identities).
   "imageId": "sha256-hash",
   "albumId": "album-id",           // KEY: Person identity
   "albumClusterId": "cluster::...",
+  "absolutePath": "/path/to/image.jpg",
   "resolved": true,
   "displayName": "Person Name",
   "instagramHandle": "@username"
@@ -325,12 +364,22 @@ Unresolved face embeddings (awaiting review).
   "gender": "female",
   "resolved": false,
   "suggestedAlbumId": "album-id",
-  "suggestedScore": 0.85
+  "suggestedScore": 0.85,
+  "path": "/path/to/image.jpg"
 }
 ```
 
 #### 4. `album_dominants`
-Album dominance vectors (for aggregator detection).
+Album dominance vectors (for aggregator detection and duplicate album detection).
+
+**Payload**:
+```json
+{
+  "albumId": "album-id",
+  "clusterId": "cluster-id",
+  "ratio": 0.75
+}
+```
 
 ---
 
@@ -378,11 +427,26 @@ Image similarity search.
 - `minScore` (optional)
 
 #### `POST /api/search/face`
-Face similarity search.
+Face similarity search with thumbnail previews.
 
 **Request**: `multipart/form-data` with `file` (image)
 
 **Query Parameters**: Same as image search
+
+**Response**:
+```json
+{
+  "results": [
+    {
+      "imageId": "...",
+      "albumId": "...",
+      "absolutePath": "...",
+      "score": 0.85,
+      "previewUrl": "data:image/jpeg;base64,..."  // Thumbnail preview
+    }
+  ]
+}
+```
 
 ---
 
@@ -478,14 +542,72 @@ Get directory scan progress.
 ### Album Endpoints
 
 #### `GET /api/albums`
-List all albums.
+List all albums with dominant face previews.
 
 **Query Parameters**:
 - `skip` (default: 0)
 - `take` (default: 20, max: 100)
 
+**Response**:
+```json
+{
+  "total": 100,
+  "items": [
+    {
+      "albumId": "...",
+      "displayName": "...",
+      "imageCount": 100,
+      "faceImageCount": 85,
+      "previewBase64": "data:image/jpeg;base64,...",  // Dominant face thumbnail
+      "mergeCandidate": false,
+      "duplicateAlbumId": null,
+      "suspiciousAggregator": false
+    }
+  ]
+}
+```
+
 #### `GET /api/albums/{albumId}`
 Get album details.
+
+#### `GET /api/albums/{albumId}/dominant-face`
+Get dominant face thumbnail as base64-encoded JPEG.
+
+**Response**:
+```json
+{
+  "albumId": "...",
+  "hasDominantFace": true,
+  "previewBase64": "data:image/jpeg;base64,...",
+  "faceId": "...",
+  "imagePath": "..."
+}
+```
+
+#### `GET /api/albums/{albumId}/clusters`
+Get top face clusters for an album with previews.
+
+**Query Parameters**:
+- `topK` (default: 10, max: 20)
+
+**Response**:
+```json
+{
+  "albumId": "...",
+  "totalClusters": 5,
+  "clusters": [
+    {
+      "clusterId": "...",
+      "imageCount": 50,
+      "faceCount": 45,
+      "isDominant": true,
+      "previewBase64": "data:image/jpeg;base64,...",
+      "faceId": "...",
+      "imagePath": "..."
+    }
+  ]
+}
+```
 
 #### `POST /api/albums/{albumId}/identity`
 Update album identity or rename.
@@ -514,6 +636,49 @@ Set tags on an album.
 }
 ```
 
+#### `POST /api/albums/{albumId}/clear-suspicious`
+Clear the suspicious aggregator flag on an album.
+
+---
+
+### Review Endpoints
+
+#### `GET /api/reviews`
+List all review records (merge candidates, aggregators).
+
+**Query Parameters**:
+- `type` (optional: "AlbumMerge" | "AggregatorAlbum")
+- `status` (optional: "pending" | "approved" | "rejected")
+
+#### `POST /_diagnostics/embedder/reviews/update-status/{reviewId}`
+Update review status.
+
+**Request**:
+```json
+{
+  "status": "approved" | "rejected" | "pending"
+}
+```
+
+**Note**: Approving an "AggregatorAlbum" review automatically clears the `SuspiciousAggregator` flag.
+
+#### `POST /_diagnostics/embedder/reviews/merge-albums`
+Merge two albums.
+
+**Request**:
+```json
+{
+  "sourceAlbumId": "album-to-merge",
+  "targetAlbumId": "target-album"
+}
+```
+
+**Behavior**:
+- Updates all image documents to target album
+- Updates all cluster documents to target album
+- Updates Qdrant vectors with new albumId
+- Deletes source album document
+
 ---
 
 ### Indexing Endpoints
@@ -525,16 +690,22 @@ Scan directory and create pending image documents.
 ```json
 {
   "directoryPath": "C:/path/to/images",
-  "albumId": "my-album",
-  "includeVideos": false
+  "albumId": "my-album",  // Optional: if not provided, uses directory name
+  "deriveAlbumFromLeaf": true,  // Use directory name as albumId
+  "includeVideos": false,
+  "recursive": true
 }
 ```
 
 **Response**:
 ```json
 {
-  "pathsAdded": 1234,
-  "pathsSkipped": 0
+  "root": "C:/path/to/images",
+  "albumId": "my-album",
+  "scanned": 1234,
+  "matched": 1234,
+  "upserts": 1234,
+  "succeeded": 1234
 }
 ```
 
@@ -552,7 +723,7 @@ Embedder service status.
 Embedder self-test (CLIP text/image embedding).
 
 #### `POST /_diagnostics/embedder/factory-reset`
-**⚠️ DESTRUCTIVE**: Delete all Qdrant collections and MongoDB documents.
+**⚠️ DESTRUCTIVE**: Delete all Qdrant collections and MongoDB documents, then recreate Qdrant collections.
 
 **Response**:
 ```json
@@ -560,6 +731,7 @@ Embedder self-test (CLIP text/image embedding).
   "success": true,
   "message": "Factory reset completed successfully...",
   "qdrantCollectionsDeleted": ["clip_512", "faces_arcface_512", ...],
+  "qdrantCollectionsRecreated": true,
   "mongoCollectionsCleared": {
     "images": 1234,
     "albums": 56,
@@ -568,6 +740,151 @@ Embedder self-test (CLIP text/image embedding).
   "errors": []
 }
 ```
+
+#### `GET /_diagnostics/embedder/album-status?albumId={albumId}`
+Get album processing status (pending, done, error counts).
+
+#### `GET /_diagnostics/embedder/album-errors?albumId={albumId}`
+Get error messages for failed images in an album.
+
+#### `POST /_diagnostics/embedder/reset-errors?albumId={albumId}`
+Reset error images back to pending for retry.
+
+#### `GET /_diagnostics/embedder/merge-candidates`
+List albums flagged as merge candidates.
+
+#### `GET /_diagnostics/embedder/reviews`
+List all review records.
+
+#### `POST /_diagnostics/embedder/reviews/create-merge/{albumId}`
+Manually create a merge review for an album.
+
+#### `POST /_diagnostics/embedder/reviews/fix-null-ids`
+Fix review records with null `_id` values.
+
+#### `POST /_diagnostics/embedder/generate-clip-embeddings?albumId={albumId}`
+Generate CLIP embeddings for existing images that are missing them.
+
+**Query Parameters**:
+- `albumId` (optional: filter by album)
+
+#### `GET /_diagnostics/embedder/check-file?path={filePath}`
+Check if a file exists and get file information.
+
+**Response**:
+```json
+{
+  "path": "C:/path/to/file.jpg",
+  "exists": true,
+  "size": 123456,
+  "lastModified": "2024-01-01T00:00:00Z",
+  "error": null
+}
+```
+
+#### `GET /_diagnostics/embedder/test-preview?path={filePath}`
+Test preview generation for a specific file path.
+
+**Response**:
+```json
+{
+  "path": "C:/path/to/file.jpg",
+  "fileExists": true,
+  "fileSize": 123456,
+  "lastModified": "2024-01-01T00:00:00Z",
+  "previewBase64": "data:image/jpeg;base64,...",
+  "error": null
+}
+```
+
+#### `POST /_diagnostics/embedder/fix-album-ids`
+Fix album IDs for images based on their actual directory path.
+
+**Query Parameters**:
+- `oldAlbumId` (optional: filter by old album ID)
+- `basePath` (optional: filter by path pattern)
+
+**Response**:
+```json
+{
+  "fixed": 50,
+  "qdrantUpdated": 0,
+  "errors": []
+}
+```
+
+**Note**: Extracts album ID from directory path (e.g., `__albumname__` or `__name_x`) and updates MongoDB. Qdrant will be updated on next re-index.
+
+---
+
+## 🎨 Frontend
+
+### React Application
+
+The frontend is a modern React application built with Vite, providing a user-friendly interface for all FaceSearch operations.
+
+**Location**: `frontend/`  
+**Development Server**: `http://localhost:3000`  
+**Production Build**: Served from `FaceSearch/wwwroot/`
+
+### Pages
+
+1. **Albums** (`/albums`)
+   - Browse all albums with thumbnails
+   - View merge candidates and suspicious aggregators
+   - Merge albums directly from the list
+   - Click to view album details
+
+2. **Album Detail** (`/albums/:albumId`)
+   - View album information and statistics
+   - See top face clusters with previews
+   - Manage merge candidates
+   - Clear suspicious aggregator flag
+   - View and manage reviews
+
+3. **Search** (`/search`)
+   - Text search
+   - Image similarity search
+   - Face search with thumbnail previews
+   - Click thumbnails to enlarge
+   - View full file paths
+
+4. **Face Review** (`/face-review`)
+   - Review unresolved faces
+   - Accept or reject faces
+   - Assign to albums
+
+5. **Indexing** (`/indexing`)
+   - Seed directories for indexing
+   - Monitor indexing progress
+
+6. **Diagnostics** (`/diagnostics`)
+   - System status
+   - Generate CLIP embeddings
+   - Factory reset
+   - Error management
+
+7. **Reviews** (`/reviews`)
+   - View album-level reviews (merge candidates, aggregators)
+   - Approve or reject reviews
+   - Merge albums from reviews
+
+### Setup
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### Build for Production
+
+```bash
+cd frontend
+npm run build
+```
+
+The built files will be output to `FaceSearch/wwwroot/` and served by the .NET API.
 
 ---
 
@@ -583,14 +900,18 @@ Embedder self-test (CLIP text/image embedding).
 3. Worker picks up pending images
    ↓
 4. Worker calls embedder:
-   - CLIP embedding → clip_512
-   - Face embedding → faces_arcface_512
+   - CLIP embedding → clip_512 (if EnableClip=true)
+   - Face embedding → faces_arcface_512 (if EnableFace=true)
    ↓
 5. Upserts vectors to Qdrant
    ↓
 6. Marks images as "done" in MongoDB
    ↓
-7. If album complete → triggers album finalization
+7. If album complete → triggers album finalization:
+   - Computes dominant subject
+   - Detects aggregators
+   - Detects merge candidates
+   - Creates review records if needed
 ```
 
 ### 2. Face Review Workflow
@@ -606,7 +927,7 @@ Embedder self-test (CLIP text/image embedding).
    - MongoDB: face_reviews
    - Qdrant: faces_review_512
    ↓
-5. User reviews in UI (review.html)
+5. User reviews in UI (Face Review page)
    ↓
 6. POST /api/faces/{faceId}/resolve
    ↓
@@ -641,13 +962,32 @@ Embedder self-test (CLIP text/image embedding).
 2. Calls AlbumFinalizerService
    ↓
 3. Computes:
-   - Dominant subject (most common face)
+   - Dominant subject (most common face cluster)
    - Aggregator detection (multiple different people)
-   - Merge candidates (similar albums)
+   - Merge candidates (similar albums via album_dominants search)
    ↓
 4. Updates album document
    ↓
-5. Creates review entries for suspicious albums
+5. Creates review entries for:
+   - Suspicious aggregators (AggregatorAlbum review)
+   - Merge candidates (AlbumMerge review)
+```
+
+### 5. Album Merging Workflow
+
+```
+1. User identifies merge candidate (via UI or API)
+   ↓
+2. POST /_diagnostics/embedder/reviews/merge-albums
+   ↓
+3. System updates:
+   - All image documents: AlbumId → targetAlbumId
+   - All cluster documents: AlbumId → targetAlbumId, _id → newId
+   - All Qdrant vectors: albumId → targetAlbumId
+   ↓
+4. Deletes source album document
+   ↓
+5. Returns merge statistics
 ```
 
 ---
@@ -659,6 +999,7 @@ Embedder self-test (CLIP text/image embedding).
 - **Docker Desktop** (for MongoDB + Qdrant)
 - **.NET 8.0 SDK**
 - **Python 3.11**
+- **Node.js 18+** (for frontend)
 - **Windows** (or adjust scripts for Linux/Mac)
 
 ### One-Command Startup
@@ -674,6 +1015,13 @@ This will:
 2. Start Python embedder service
 3. Start .NET API
 4. Start .NET Worker
+5. Start React frontend (if `node_modules` exists, otherwise runs `npm install` first)
+
+**Access Points**:
+- **Frontend**: http://localhost:3000
+- **API Swagger**: http://localhost:5240/swagger
+- **Embedder**: http://localhost:8090/_status
+- **Qdrant Dashboard**: http://localhost:6333/dashboard
 
 ### Manual Startup
 
@@ -700,12 +1048,20 @@ cd Workers.Indexer
 dotnet run
 ```
 
-### Verify Services
+#### Step 5: Start Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-- **API**: http://localhost:5240/swagger
-- **Embedder**: http://localhost:8090/_status
-- **Qdrant**: http://localhost:6333/dashboard
-- **MongoDB**: http://localhost:27017
+### Stop All Services
+
+```bash
+stop-all.bat
+```
+
+This stops all Docker containers.
 
 ---
 
@@ -724,7 +1080,8 @@ dotnet run
     "BaseUrl": "http://localhost:6333/",
     "ClipCollection": "clip_512",
     "FaceCollection": "faces_arcface_512",
-    "ReviewFaceCollection": "faces_review_512"
+    "ReviewFaceCollection": "faces_review_512",
+    "DominantCollection": "album_dominants"
   },
   "Mongo": {
     "ConnectionString": "mongodb://127.0.0.1:27017",
@@ -733,10 +1090,14 @@ dotnet run
   "AlbumFinalizer": {
     "LinkThreshold": 0.45,
     "TopK": 50,
-    "AggregatorThreshold": 0.50
+    "AggregatorThreshold": 0.50,
+    "SubjectMatchThreshold": 0.74
   }
 }
 ```
+
+**Key Settings**:
+- `SubjectMatchThreshold`: Similarity threshold for duplicate album detection (default: 0.74)
 
 ### Worker Configuration (`Workers.Indexer/appsettings.json`)
 
@@ -745,12 +1106,18 @@ dotnet run
   "Indexer": {
     "BatchSize": 256,
     "IntervalSeconds": 1,
-    "EnableClip": true,
+    "EnableClip": false,
     "EnableFace": true,
     "Parallelism": 8
   }
 }
 ```
+
+**Key Settings**:
+- `EnableClip`: Generate CLIP embeddings during indexing (default: false for faster initial indexing)
+- `EnableFace`: Generate face embeddings (default: true)
+- `BatchSize`: Number of images processed per batch
+- `Parallelism`: Concurrent image processing threads
 
 ### Embedder Configuration (`embedder/start.bat`)
 
@@ -779,7 +1146,8 @@ curl -X POST http://localhost:5240/api/index/seed-directory \
   -H "Content-Type: application/json" \
   -d '{
     "directoryPath": "C:/Users/Photos",
-    "albumId": "my-album"
+    "albumId": "my-album",
+    "deriveAlbumFromLeaf": false
   }'
 
 # Worker will automatically process pending images
@@ -814,7 +1182,7 @@ curl -X POST http://localhost:5240/api/search/text \
     "topK": 10
   }'
 
-# Face search
+# Face search (returns thumbnails)
 curl -X POST http://localhost:5240/api/search/face \
   -F "file=@query.jpg" \
   -F "topK=20" \
@@ -835,6 +1203,32 @@ curl -X POST http://localhost:5240/api/faces/scan-directory \
 
 # Check progress
 curl http://localhost:5240/api/faces/scan-status/{scanId}
+```
+
+### Example 5: Fix Album IDs
+
+```bash
+# Fix album IDs for images with wrong albumId
+curl -X POST "http://localhost:5240/_diagnostics/embedder/fix-album-ids?oldAlbumId=__araiya__"
+```
+
+### Example 6: Generate CLIP Embeddings
+
+```bash
+# Generate CLIP embeddings for existing images
+curl -X POST "http://localhost:5240/_diagnostics/embedder/generate-clip-embeddings?albumId=my-album"
+```
+
+### Example 7: Merge Albums
+
+```bash
+# Merge two albums
+curl -X POST http://localhost:5240/_diagnostics/embedder/reviews/merge-albums \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sourceAlbumId": "album-to-merge",
+    "targetAlbumId": "target-album"
+  }'
 ```
 
 ---
@@ -870,6 +1264,7 @@ curl http://localhost:5240/api/faces/scan-status/{scanId}
 - Check worker logs for errors
 - Verify MongoDB connection
 - Check if images have valid file paths
+- Use `POST /_diagnostics/embedder/reset-errors` to retry failed images
 
 ### API Connection Errors
 
@@ -892,6 +1287,35 @@ curl http://localhost:5240/api/faces/scan-status/{scanId}
 - Check embedder status: `GET /_diagnostics/embedder/status`
 - Fallback to CPU: Set `CLIP_DEVICE=cpu`
 
+### Missing Qdrant Collections
+
+**Issue**: Worker fails with "Collection doesn't exist" errors
+
+**Solutions**:
+- Collections are auto-created on startup
+- Manually create: Run `create-qdrant-collections.ps1`
+- Factory reset: `POST /_diagnostics/embedder/factory-reset` (recreates collections)
+
+### Preview Thumbnails Not Showing
+
+**Issue**: Search results or albums show "No preview"
+
+**Solutions**:
+- Verify file paths exist: Use `GET /_diagnostics/embedder/check-file?path={path}`
+- Test preview generation: Use `GET /_diagnostics/embedder/test-preview?path={path}`
+- Check API logs for preview generation errors
+- Verify image files are not corrupted or locked
+- Check file permissions
+
+### Album IDs Mismatch
+
+**Issue**: Album ID in path doesn't match stored albumId
+
+**Solutions**:
+- Use `POST /_diagnostics/embedder/fix-album-ids?oldAlbumId={wrongId}` to fix
+- System extracts album ID from directory path automatically
+- Qdrant will be updated on next re-index
+
 ---
 
 ## 📊 Performance Tuning
@@ -902,6 +1326,7 @@ Adjust in `Workers.Indexer/appsettings.json`:
 - `BatchSize`: Number of images processed per batch (default: 256)
 - `Parallelism`: Concurrent image processing (default: 8)
 - `IntervalSeconds`: Polling interval (default: 1)
+- `EnableClip`: Disable CLIP during initial indexing for faster processing
 
 ### Search Performance
 
@@ -915,6 +1340,12 @@ Adjust in `Workers.Indexer/appsettings.json`:
 - Monitor GPU memory usage
 - Adjust batch sizes if memory constrained
 
+### Preview Generation
+
+- Preview generation happens synchronously during search
+- Large images may take longer to process
+- Consider caching previews if needed
+
 ---
 
 ## 🔒 Security Considerations
@@ -923,6 +1354,7 @@ Adjust in `Workers.Indexer/appsettings.json`:
 - **File Paths**: Ensure proper access controls on image directories
 - **API Security**: Add authentication/authorization for production
 - **Network**: Consider firewall rules for service ports
+- **CORS**: Frontend configured for development; update for production
 
 ---
 
@@ -944,4 +1376,4 @@ Adjust in `Workers.Indexer/appsettings.json`:
 
 ---
 
-**Last Updated**: 2024
+**Last Updated**: December 2024

@@ -50,6 +50,7 @@ builder.Services.AddScoped<IAlbumRepository, AlbumRepository>();
 builder.Services.AddScoped<IAlbumClusterRepository, AlbumClusterRepository>();
 builder.Services.AddScoped<AlbumReviewService>();
 builder.Services.AddSingleton<IReviewRepository, ReviewRepository>();
+builder.Services.AddSingleton<IFaceReviewRepository, FaceReviewRepository>();
 
 builder.Services.AddScoped<AlbumFinalizerService>();
 builder.Services.Configure<AlbumFinalizerOptions>(
@@ -59,7 +60,13 @@ builder.Services.Configure<AlbumFinalizerOptions>(
 // ---------- Web ----------
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(opt =>
+{
+    // include XML comments for better Swagger docs
+    var xml = Path.Combine(AppContext.BaseDirectory, "FaceSearch.xml");
+    if (File.Exists(xml))
+        opt.IncludeXmlComments(xml);
+});
 builder.Services.AddInfrastructure2();
 builder.Services.AddSingleton<IAlbumRepository, AlbumRepository>();
 
@@ -89,6 +96,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+app.UseStaticFiles();
+if (!app.Environment.IsDevelopment())
+    app.UseHttpsRedirection();
 app.MapControllers();
 app.Run();

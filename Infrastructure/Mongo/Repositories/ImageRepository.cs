@@ -65,6 +65,29 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo.Repositories
             return await _col.CountDocumentsAsync(filter, cancellationToken: ct);
         }
 
+        public async Task<int> ResetErrorsToPendingAsync(string? albumId, CancellationToken ct)
+        {
+            var filter = Builders<ImageDocMongo>.Filter.Eq(x => x.EmbeddingStatus, "error");
+            if (!string.IsNullOrWhiteSpace(albumId))
+            {
+                filter = Builders<ImageDocMongo>.Filter.And(
+                    filter,
+                    Builders<ImageDocMongo>.Filter.Eq(x => x.AlbumId, albumId));
+            }
+
+            var update = Builders<ImageDocMongo>.Update
+                .Set(x => x.EmbeddingStatus, "pending")
+                .Unset(x => x.Error)
+                .Unset(x => x.EmbeddedAt);
+
+            var result = await _col.UpdateManyAsync(filter, update, cancellationToken: ct);
+            return (int)result.ModifiedCount;
+        }
+
+        public async Task<ImageDocMongo?> GetAsync(string id, CancellationToken ct)
+        {
+            return await _col.Find(x => x.Id == id).FirstOrDefaultAsync(ct);
+        }
     }
 
 }

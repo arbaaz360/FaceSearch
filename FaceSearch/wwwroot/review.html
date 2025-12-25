@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Face Review</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #111827;
+      --accent: #22d3ee;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --danger: #f87171;
+    }
+    body { margin: 0; font-family: "Segoe UI", system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+    header { padding: 16px 20px; border-bottom: 1px solid #1f2937; display: flex; align-items: center; gap: 12px; }
+    button, input { font: inherit; }
+    .pill { background: #1f2937; padding: 4px 10px; border-radius: 999px; color: var(--muted); border: 1px solid #1f2937; }
+    main { padding: 20px; display: grid; gap: 12px; }
+    .card { background: var(--card); border: 1px solid #1f2937; border-radius: 12px; padding: 14px; display: grid; gap: 8px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .row strong { color: var(--muted); font-weight: 600; }
+    .inputs { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    input[type=text] { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #1f2937; background: #0b1221; color: var(--text); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn { border: none; cursor: pointer; padding: 8px 12px; border-radius: 8px; }
+    .btn.primary { background: var(--accent); color: #0b1221; }
+    .btn.secondary { background: #1f2937; color: var(--text); border: 1px solid #1f2937; }
+    .btn.danger { background: #1f2937; color: #f87171; border: 1px solid #1f2937; }
+    .meta { color: var(--muted); font-size: 13px; }
+    .status { color: var(--muted); }
+    .previews { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: start; }
+    .preview-box { background:#0b1221; border:1px solid #1f2937; border-radius:8px; padding:8px; text-align:center; min-height: 220px; }
+    .preview-box img { max-width:100%; max-height:260px; width:auto; height:auto; border-radius:6px; display:block; margin:0 auto; object-fit: cover; }
+    .members { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+    .member { background:#0b1221; border:1px solid #1f2937; border-radius:8px; padding:8px; display:flex; flex-direction:column; gap:6px; text-align:center; }
+    .member img { max-width:100%; max-height:140px; object-fit:cover; border-radius:6px; }
+    .member a { color: var(--accent); text-decoration: underline; word-break: break-all; font-size:12px; }
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 9999; }
+    .modal.show { display: flex; }
+    .modal img { max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
+    .modal .close { position: absolute; top: 20px; right: 24px; color: #e5e7eb; font-size: 28px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="font-size:18px; font-weight:700;">Face Review</div>
+    <button class="btn secondary" onclick="loadUnresolved()">Refresh</button>
+    <div class="pill" id="count">0 pending</div>
+  </header>
+  <main id="list">
+    <div class="meta">Loading.</div>
+  </main>
+  <div class="modal" id="lightbox" onclick="hideModal()">
+    <span class="close" aria-label="Close">✕</span>
+    <img id="lightbox-img" alt="preview">
+  </div>
+  <script>
+    const apiBase = window.location.origin;
+
+    async function loadUnresolved() {
+      setStatus('Loading...');
+      try {
+        console.log('Fetching unresolved from', `${apiBase}/api/faces/unresolved?take=100`);
+        const res = await fetch(`${apiBase}/api/faces/unresolved?take=100`, { headers: { Accept: 'application/json' } });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        renderList(data);
+      } catch (err) {
+        setStatus('Error: ' + err);
+        console.error(err);
+      }
+    }
+
+    function setStatus(msg) {
+      const list = document.getElementById('list');
+      list.innerHTML = `<div class="meta">${msg}</div>`;
+    }
+
+    function renderList(items) {
+      const list = document.getElementById('list');
+      items = [...items].sort((a, b) => (b.members?.length || 1) - (a.members?.length || 1));
+      document.getElementById('count').textContent = `${items.length} pending`;
+      if (!items || items.length === 0) {
+        list.innerHTML = `<div class="meta">No unresolved faces.</div>`;
+        return;
+      }
+      list.innerHTML = '';
+      for (const item of items) {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+    <div class="row"><strong>faceId</strong><span>${item.faceId}</span></div>
+          ${item.absolutePath ? `<div class="row"><strong>file</strong><a href="#" data-url="${apiBase}/api/faces/file-by-path?path=${encodeURIComponent(item.absolutePath)}" onclick="return openImage(this.dataset.url)" style="color: var(--accent); text-decoration: underline;">${item.absolutePath.split(/[\\\\\\/]/).slice(-2).join('/')}</a> <a class="pill" style="cursor:pointer" href="${apiBase}/api/faces/${item.faceId}/file">download</a></div>` : ''}
+          <div class="row meta">
+            <span>gender: ${item.gender}</span>
+            <span>suggested: ${item.suggestedAlbumId || '-'} (${(item.suggestedScore ?? 0).toFixed(3)})</span>
+            <span>created: ${new Date(item.createdAt).toLocaleString()}</span>
+            <span>bbox: ${item.bbox ? item.bbox.join(',') : '-'}</span>
+          </div>
+          <div class="previews">
+            <div class="preview-box">
+              <div class="meta">Detected face</div>
+              ${item.thumbnailBase64 ? `${item.absolutePath ? `<a href="#" data-url="${apiBase}/api/faces/file-by-path?path=${encodeURIComponent(item.absolutePath)}" onclick="return openImage(this.dataset.url)"><img src="${item.thumbnailBase64}" alt="face"></a>` : `<img src="${item.thumbnailBase64}" alt="face">`} <a class="pill" style="cursor:pointer" href="${apiBase}/api/faces/${item.faceId}/crop">download crop</a>` : '<div class="meta">no preview</div>'}
+            </div>
+            <div class="preview-box">
+              <div class="meta">Suggested</div>
+              ${item.suggestedPreviewBase64 ? `<img src="${item.suggestedPreviewBase64}" alt="suggested">` : '<div class="meta">no preview</div>'}
+            </div>
+          </div>
+          ${item.members && item.members.length ? `
+            <div class="meta">Cluster members (${item.members.length})</div>
+            <div class="members">
+              ${item.members.map(m => `
+                <div class="member">
+                  ${m.thumbnailBase64 ? `${m.absolutePath ? `<a href="#" data-url="${apiBase}/api/faces/file-by-path?path=${encodeURIComponent(m.absolutePath)}" onclick="return openImage(this.dataset.url)"><img src="${m.thumbnailBase64}" alt="member"></a>` : `<img src="${m.thumbnailBase64}" alt="member">`}` : '<div class="meta">no preview</div>'}
+                  ${m.absolutePath ? `<a href="#" data-url="${apiBase}/api/faces/file-by-path?path=${encodeURIComponent(m.absolutePath)}" onclick="return openImage(this.dataset.url)">${m.absolutePath.split(/[\\\\\\/]/).slice(-2).join('/')}</a>` : ''}
+                  <button class="btn danger" style="padding:6px 8px;" onclick="removeMember('${item.faceId}','${m.id}')">Remove</button>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          <div class="inputs">
+            <div><small class="meta">Album Id</small><input type="text" id="album-${item.faceId}" placeholder="album id" value="${item.suggestedAlbumId || ''}"></div>
+            <div><small class="meta">Display Name</small><input type="text" id="name-${item.faceId}" placeholder="Display name"></div>
+            <div><small class="meta">Instagram Handle</small><input type="text" id="ig-${item.faceId}" placeholder="@handle (optional)"></div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" onclick="resolveFace('${item.faceId}', true)">Accept</button>
+            <button class="btn danger" onclick="resolveFace('${item.faceId}', false)">Reject</button>
+          </div>
+          <div class="status" id="status-${item.faceId}"></div>
+        `;
+        list.appendChild(card);
+      }
+      wireLightbox();
+    }
+
+    async function resolveFace(faceId, accept) {
+      const statusEl = document.getElementById(`status-${faceId}`);
+      const albumId = document.getElementById(`album-${faceId}`)?.value?.trim() || null;
+      const displayName = document.getElementById(`name-${faceId}`)?.value?.trim() || null;
+      const ig = document.getElementById(`ig-${faceId}`)?.value?.trim() || null;
+      statusEl.textContent = accept ? 'Accepting.' : 'Rejecting.';
+      try {
+        const res = await fetch(`${apiBase}/api/faces/${faceId}/resolve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accept, albumId, displayName, instagramHandle: ig })
+        });
+        const body = await res.text();
+        if (!res.ok) throw new Error(body || res.statusText);
+        statusEl.textContent = 'Done: ' + body;
+        setTimeout(loadUnresolved, 500);
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err;
+      }
+    }
+
+    async function removeMember(faceId, memberId) {
+      const statusEl = document.getElementById(`status-${faceId}`);
+      statusEl.textContent = 'Removing member...';
+      try {
+        const res = await fetch(`${apiBase}/api/faces/${faceId}/members/${memberId}/remove`, { method: 'POST' });
+        const body = await res.text();
+        if (!res.ok) throw new Error(body || res.statusText);
+        statusEl.textContent = 'Member moved to a new review.';
+        setTimeout(loadUnresolved, 400);
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err;
+      }
+    }
+
+    function wireLightbox() {
+      document.querySelectorAll('[data-url]').forEach(a => {
+        a.onclick = (ev) => {
+          ev.preventDefault();
+          openImage(a.dataset.url);
+          return false;
+        };
+      });
+    }
+
+    function openImage(url) {
+      console.log('openImage', url);
+      const modal = document.getElementById('lightbox');
+      const img = document.getElementById('lightbox-img');
+      img.src = url;
+      modal.classList.add('show');
+      return false;
+    }
+
+    function hideModal() {
+      const modal = document.getElementById('lightbox');
+      const img = document.getElementById('lightbox-img');
+      img.src = '';
+      modal.classList.remove('show');
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hideModal();
+    });
+
+    loadUnresolved();
+    window.addEventListener('load', loadUnresolved);
+  </script>
+</body>
+</html>

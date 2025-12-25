@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Who Is This?</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { --bg:#0f172a; --card:#111827; --text:#e5e7eb; --muted:#94a3b8; --accent:#22d3ee; }
+    body { margin:0; font-family:"Segoe UI",system-ui; background:var(--bg); color:var(--text); }
+    header { padding:16px 20px; border-bottom:1px solid #1f2937; display:flex; align-items:center; gap:12px; }
+    main { padding:20px; display:grid; gap:16px; }
+    .drop { border:1px dashed #334155; border-radius:12px; padding:16px; text-align:center; background:#0b1221; cursor:pointer; }
+    .btn { padding:8px 12px; border-radius:8px; border:1px solid #1f2937; background:#1f2937; color:var(--text); cursor:pointer; }
+    .card { background:var(--card); border:1px solid #1f2937; border-radius:12px; padding:14px; display:grid; gap:8px; }
+    .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; color:var(--muted); font-size:13px; }
+    .cols { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:12px; }
+    .preview { background:#0b1221; border:1px solid #1f2937; border-radius:8px; padding:8px; text-align:center; }
+    img.thumb { max-width:100%; max-height:220px; border-radius:8px; object-fit:cover; display:block; margin:0 auto; }
+    .tag { padding:2px 6px; border-radius:6px; background:#1f2937; color:var(--muted); font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="font-size:18px;font-weight:700;">Who Is This?</div>
+    <button class="btn" onclick="triggerFile()">Choose Image</button>
+    <button class="btn" id="persist" disabled onclick="persistReview()">Persist as review</button>
+    <div id="status" class="tag">drop or choose an image</div>
+    <input id="file" type="file" accept="image/*" style="display:none">
+  </header>
+  <main>
+    <div class="drop" id="drop" ondragover="event.preventDefault()" ondrop="dropHandler(event)">
+      Drag & drop an image here, or click “Choose Image”.
+    </div>
+    <div id="results"></div>
+  </main>
+  <script>
+    const apiBase = window.location.origin;
+    let lastFile = null;
+    const fileInput = document.getElementById('file');
+    const statusEl = document.getElementById('status');
+    const persistBtn = document.getElementById('persist');
+    fileInput.addEventListener('change', async () => {
+      if (fileInput.files.length > 0) await submit(fileInput.files[0]);
+    });
+    function triggerFile(){ fileInput.click(); }
+    async function dropHandler(e){
+      e.preventDefault();
+      if (e.dataTransfer.files.length>0) await submit(e.dataTransfer.files[0]);
+    }
+    async function submit(file){
+      statusEl.textContent = 'Uploading...';
+      persistBtn.disabled = true;
+      const form = new FormData();
+      form.append('file', file);
+      try{
+        const res = await fetch(`${apiBase}/api/faces/who`, { method:'POST', body: form });
+        const data = await res.json();
+        render(data);
+        statusEl.textContent = 'Done (not persisted)';
+        lastFile = file;
+        persistBtn.disabled = false;
+      }catch(err){
+        statusEl.textContent = 'Error';
+        lastFile = null;
+        persistBtn.disabled = true;
+      }
+    }
+    async function persistReview(){
+      if(!lastFile) return;
+      statusEl.textContent = 'Persisting...';
+      const form = new FormData();
+      form.append('file', lastFile);
+      try{
+        const res = await fetch(`${apiBase}/api/faces/review`, { method:'POST', body: form });
+        if(!res.ok) throw new Error(await res.text());
+        statusEl.textContent = 'Persisted to review queue';
+      }catch(err){
+        statusEl.textContent = 'Persist failed';
+      }
+    }
+    function render(data){
+      const container = document.getElementById('results');
+      if(!data || !data.faces || data.faces.length===0){ container.innerHTML='<div class="tag">No faces detected.</div>'; return; }
+      container.innerHTML = '';
+      data.faces.forEach((f, idx)=>{
+        const card = document.createElement('div');
+        card.className='card';
+        card.innerHTML = `
+          <div class="row"><span class="tag">face #${idx+1}</span><span>gender: ${f.gender||'?'}</span><span>bbox: ${f.bbox ? f.bbox.join(',') : '—'}</span></div>
+          <div class="cols">
+            <div class="preview">
+              <div class="tag">Detected</div>
+              ${f.queryThumbnailBase64 ? `<img class="thumb" src="${f.queryThumbnailBase64}">` : '<div class="tag">no preview</div>'}
+            </div>
+            <div class="preview">
+              <div class="tag">Best album</div>
+              ${f.albumMatch ? `<div>${f.albumMatch.albumId || 'unknown'} (score ${(f.albumMatch.score||0).toFixed(3)})</div>${f.albumMatch.previewBase64 ? `<img class="thumb" src="${f.albumMatch.previewBase64}">` : ''}` : '<div class="tag">none</div>'}
+            </div>
+            <div class="preview">
+              <div class="tag">Similar unresolved</div>
+              ${renderSim(f.similarUnresolved)}
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+    function renderSim(list){
+      if(!list || list.length===0) return '<div class="tag">none</div>';
+      return list.map(s=>`
+        <div style="margin-bottom:6px; text-align:left;">
+          <div class="tag">score ${(s.score||0).toFixed(3)}${s.rejected ? ' (rejected)' : ''}</div>
+          ${s.thumbnailBase64 ? `<img class="thumb" src="${s.thumbnailBase64}">` : '<div class="tag">no preview</div>'}
+        </div>
+      `).join('');
+    }
+  </script>
+</body>
+</html>

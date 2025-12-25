@@ -18,7 +18,7 @@ public sealed class QdrantPoint
 {
     public string? id { get; init; }
     public float score { get; init; }
-    public Dictionary<string, object>? payload { get; init; }
+    public Dictionary<string, object?>? payload { get; init; }
 }
 public sealed class QdrantClient : IQdrantClient
 {

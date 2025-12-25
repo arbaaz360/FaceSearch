@@ -17,6 +17,7 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
         public IMongoCollection<AlbumMongo> Albums { get; }
         public IMongoCollection<AlbumClusterMongo> AlbumClusters { get; }
         public IMongoCollection<ReviewMongo> Reviews { get; }
+        public IMongoCollection<FaceReviewMongo> FaceReviews { get; }
 
         public MongoContext(IConfiguration cfg)
         {
@@ -32,6 +33,7 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
             Albums = Database.GetCollection<AlbumMongo>("albums");
             AlbumClusters = Database.GetCollection<AlbumClusterMongo>("album_clusters");
             Reviews = Database.GetCollection<ReviewMongo>("reviews");
+            FaceReviews = Database.GetCollection<FaceReviewMongo>("face_reviews");
         }
     }
 }

@@ -2,9 +2,10 @@
 
 	<PropertyGroup>
 		<TargetFramework>net8.0</TargetFramework>
-		<OutputPath>bin\Debug\net8.0-worker\</OutputPath>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
+		<NoWarn>CA1416</NoWarn>
+		<SupportedOSPlatform>windows</SupportedOSPlatform>
 	</PropertyGroup>
 
 	<ItemGroup>

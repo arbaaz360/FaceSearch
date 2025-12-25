@@ -13,7 +13,6 @@ namespace FaceSearch.Services.Implementations
         private readonly IAlbumRepository _albums;
         private readonly IMongoCollection<ImageDocMongo> _images;
         private readonly IMongoCollection<AlbumClusterMongo> _clusterCol;
-        private readonly IMongoCollection<AlbumMongo> _album;
         private readonly IReviewRepository _reviews;
         // thresholds
         const double T_LINK = 0.60;     // union threshold for same-person link
@@ -41,7 +40,7 @@ namespace FaceSearch.Services.Implementations
                 AlbumId = album.Id,
                 ClusterId = null,
                 Status = ReviewStatus.pending,
-                Notes = $"Suspicious aggregator album with {album.ImageCount} images and {album.FaceImageCount} face images. Dominant Subject: { album.DominantSubject.ToKeyValueString()} ",
+                Notes = $"Suspicious aggregator album with {album.ImageCount} images and {album.FaceImageCount} face images. Dominant Subject: { album.DominantSubject?.ToKeyValueString() ?? "null"} ",
                 Ratio = album.DominantSubject?.Ratio,
                 CreatedAt = DateTime.UtcNow
             };
@@ -49,6 +48,7 @@ namespace FaceSearch.Services.Implementations
             Console.WriteLine(inserted
                 ? $"Inserted pending review for suspicious aggregator album {album.Id}."
                 : $"Pending review for suspicious aggregator album {album.Id} already exists.");
+            await _albums.SetSuspiciousAggregatorAsync(album.Id, true, DateTime.UtcNow, ct);
             return review;
         }
 
@@ -61,7 +61,7 @@ namespace FaceSearch.Services.Implementations
                 AlbumId = album.Id,
                 ClusterId = null,
                 Status = ReviewStatus.pending,
-                Notes = $"Suspicious duplicate album {album.ImageCount} images and {album.FaceImageCount} face images. Dominant Subject: {album.DominantSubject.ToKeyValueString()} ",
+                Notes = $"Suspicious duplicate album {album.ImageCount} images and {album.FaceImageCount} face images. Dominant Subject: {album.DominantSubject?.ToKeyValueString() ?? "null"} ",
                 Ratio = album.DominantSubject?.Ratio,
                 CreatedAt = DateTime.UtcNow
             };

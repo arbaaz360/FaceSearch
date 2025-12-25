@@ -14,6 +14,11 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
         // NEW: used by IndexerWorker to flag images that contain >=1 face
         Task SetHasPeopleAsync(string id, bool value, CancellationToken ct);
         Task<long> CountPendingByAlbumAsync(string albumId, CancellationToken ct);
-
+        
+        // Reset error images back to pending for retry
+        Task<int> ResetErrorsToPendingAsync(string? albumId, CancellationToken ct);
+        
+        // Get image by ID
+        Task<ImageDocMongo?> GetAsync(string id, CancellationToken ct);
     }
 }

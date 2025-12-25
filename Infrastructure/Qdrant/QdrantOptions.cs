@@ -8,6 +8,7 @@ public sealed class QdrantOptions
     // default collections
     public string ClipCollection { get; set; } = "clip_512";
     public string FaceCollection { get; set; } = "faces_arcface_512";
+    public string ReviewFaceCollection { get; set; } = "faces_review_512";
 
     public int TimeoutSeconds { get; set; } = 20;
     public int MaxRetries { get; set; } = 3;

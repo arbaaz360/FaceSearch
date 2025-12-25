@@ -190,7 +190,67 @@ async def embed_face(file: UploadFile = File(...)):
     faces = face_app.get(img)
     if not faces:
         return {"vector": []}
-    return {"vector": faces[0].normed_embedding.tolist()}
+    first = faces[0]
+    gender_label, gender_score = "unknown", None
+    try:
+        if hasattr(first, "gender") and first.gender is not None:
+            gender_score = float(first.gender)
+            # insightface gender: 0=female, 1=male
+            gender_label = "female" if gender_score < 0.5 else "male"
+    except Exception:
+        pass
+    return {
+        "vector": first.normed_embedding.tolist(),
+        "gender": gender_label,
+        "gender_score": gender_score
+    }
+
+
+@app.post("/embed/face/multi")
+async def embed_face_multi(file: UploadFile = File(...), female_only: bool = True):
+    """
+    Detect all faces, return embedding + gender per face.
+    female_only=True filters to faces classified as female.
+    """
+    if face_app is None:
+        raise HTTPException(status_code=503, detail="face embedder not available (onnxruntime-directml not loaded or model init failed)")
+
+    data = await file.read()
+    arr = np.frombuffer(data, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # BGR
+    faces = face_app.get(img)
+
+    results = []
+    for f in faces:
+        gender_score = None
+        gender_label = "unknown"
+        try:
+            if hasattr(f, "gender") and f.gender is not None:
+                gender_score = float(f.gender)
+                # insightface gender: 0=female, 1=male
+                gender_label = "female" if gender_score < 0.5 else "male"
+        except Exception:
+            pass
+
+        if female_only and gender_label != "female":
+            continue
+
+        bbox = None
+        try:
+            if hasattr(f, "bbox") and f.bbox is not None:
+                # bbox usually ndarray [x1, y1, x2, y2]
+                bbox = [int(v) for v in f.bbox]
+        except Exception:
+            pass
+
+        results.append({
+            "vector": f.normed_embedding.tolist(),
+            "gender": gender_label,
+            "gender_score": gender_score,
+            "bbox": bbox
+        })
+
+    return {"faces": results, "count": len(results)}
 
 if __name__ == "__main__":
     import uvicorn

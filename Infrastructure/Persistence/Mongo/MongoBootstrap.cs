@@ -10,12 +10,14 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
         private readonly IMongoDatabase _db;
         private readonly string _imagesCollection;
         private readonly string _reviewsCollection;
+        private readonly string _faceReviewsCollection;
 
         public MongoBootstrap(IMongoDatabase db)
         {
             _db = db;
             _imagesCollection = "images";
             _reviewsCollection = "reviews";
+            _faceReviewsCollection = "face_reviews";
         }
 
         public async Task EnsureIndexesAsync(CancellationToken ct = default)
@@ -95,6 +97,16 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
                 idxPendingUnique,
                 idxTypeStatus
             }, ct);
+
+            // === FACE_REVIEWS (unresolved faces) ===
+            var faceReviews = _db.GetCollection<FaceReviewMongo>(_faceReviewsCollection);
+            var idxResolved = new CreateIndexModel<FaceReviewMongo>(
+                Builders<FaceReviewMongo>.IndexKeys
+                    .Ascending(x => x.Resolved)
+                    .Descending(x => x.CreatedAt),
+                new CreateIndexOptions<FaceReviewMongo> { Name = "ix_resolved_created" });
+
+            await faceReviews.Indexes.CreateOneAsync(idxResolved, cancellationToken: ct);
         }
     }
 }

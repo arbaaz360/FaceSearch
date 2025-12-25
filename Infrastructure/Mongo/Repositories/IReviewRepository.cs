@@ -15,5 +15,8 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo.Repositories
         /// Returns true if inserted, false if an equivalent pending already exists.
         /// </summary>
         Task<bool> UpsertPendingAggregator(ReviewMongo review, bool includeClusterInKey, CancellationToken ct = default);
+
+        Task<ReviewMongo?> GetAsync(string reviewId, CancellationToken ct = default);
+        Task UpdateStatusAsync(string reviewId, ReviewStatus status, CancellationToken ct = default);
     }
 }

@@ -2,10 +2,13 @@
 using Contracts.Search;                   // TextSearch*, ImageSearchResponse, SearchHit
 using FaceSearch.Application.Search;
 using FaceSearch.Infrastructure.Qdrant;   // IQdrantClient, QdrantSearchHit
+using FaceSearch.Infrastructure.Persistence.Mongo.Repositories;
+using FaceSearch.Infrastructure.Persistence.Mongo; // ImageDocMongo
 using FaceSearch.Mappers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using System.Text.Json;
+using System.Drawing;
 
 namespace FaceSearch.Api.Controllers;
 
@@ -16,12 +19,14 @@ public sealed class SearchController : ControllerBase
     private readonly ISearchService _search;
     private readonly IQdrantClient _qdrant;
     private readonly IConfiguration _cfg;
+    private readonly IImageRepository _imageRepo;
 
-    public SearchController(ISearchService search, IQdrantClient qdrant, IConfiguration cfg)
+    public SearchController(ISearchService search, IQdrantClient qdrant, IConfiguration cfg, IImageRepository imageRepo)
     {
         _search = search;
         _qdrant = qdrant;
         _cfg = cfg;
+        _imageRepo = imageRepo;
     }
 
     // ------------------------------ TEXT ------------------------------------
@@ -184,33 +189,73 @@ public sealed class SearchController : ControllerBase
                 tagsAnyOf: tags,
                 ct: ct);
 
-            // local helper (in scope for this action)
-            static string? S(IReadOnlyDictionary<string, object?> p, string key)
-                => p.TryGetValue(key, out var v) && v is not null ? v.ToString() : null;
+            var filteredHits = hits
+                .Where(h => minScore is null || h.Score >= minScore.Value)
+                .ToList();
 
             var resp = new FaceSearchResponse
             {
-                Results = hits
-         .Where(h => minScore is null || h.Score >= minScore.Value)
-         .Select(h =>
-         {
-             // wrap payload as CI for safe access
-             var payload = h.Payload is not null
-                 ? new Dictionary<string, object?>(h.Payload, StringComparer.OrdinalIgnoreCase)
-                 : new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                Results = await Task.WhenAll(filteredHits.Select(async h =>
+                {
+                    // wrap payload as CI for safe access
+                    var payload = h.Payload is not null
+                        ? new Dictionary<string, object?>(h.Payload, StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
 
-             return new FaceSearchHit
-             {
-                 ImageId = Get(payload, "imageId", "ImageId", "image_id") ?? "",
-                 AlbumId = Get(payload, "albumId", "AlbumId", "album_id"),
-                 AbsolutePath = Get(payload, "absolutePath", "path", "AbsolutePath", "Path", "absolute_path") ?? "",
-                 SubjectId = Get(payload, "subjectId", "SubjectId", "subject_id"),
-                 Score = h.Score,
-                 // FaceIndex/PreviewUrl if you add them to payload later
-             };
-         })
-         .ToArray()
+                    var imageId = Get(payload, "imageId", "ImageId", "image_id") ?? "";
+                    var absolutePath = Get(payload, "absolutePath", "path", "AbsolutePath", "Path", "absolute_path") ?? "";
+
+                    // If path not in payload, try to get it from MongoDB
+                    if (string.IsNullOrWhiteSpace(absolutePath) && !string.IsNullOrWhiteSpace(imageId))
+                    {
+                        try
+                        {
+                            var imgDoc = await _imageRepo.GetAsync(imageId, ct);
+                            if (imgDoc != null && !string.IsNullOrWhiteSpace(imgDoc.AbsolutePath))
+                            {
+                                absolutePath = imgDoc.AbsolutePath;
+                            }
+                        }
+                        catch
+                        {
+                            // Ignore errors fetching from MongoDB
+                        }
+                    }
+
+                    string? previewBase64 = null;
+                    if (!string.IsNullOrWhiteSpace(absolutePath))
+                    {
+                        try
+                        {
+                            // Try to get preview from the image path
+                            var pathPayload = new Dictionary<string, object?> { ["absolutePath"] = absolutePath };
+                            previewBase64 = TryPreviewFromPayload(pathPayload);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Log but don't fail
+                            System.Diagnostics.Debug.WriteLine($"Failed to generate preview for {absolutePath}: {ex.Message}");
+                        }
+                    }
+
+                    return new FaceSearchHit
+                    {
+                        ImageId = imageId,
+                        AlbumId = Get(payload, "albumId", "AlbumId", "album_id"),
+                        AbsolutePath = absolutePath,
+                        SubjectId = Get(payload, "subjectId", "SubjectId", "subject_id"),
+                        Score = h.Score,
+                        PreviewUrl = previewBase64, // Store preview in PreviewUrl field
+                    };
+                }))
             };
+
+            // Log search results for debugging
+            System.Diagnostics.Debug.WriteLine($"Face search: Found {hits.Count} total hits, {filteredHits.Count} after minScore filter (minScore={minScore})");
+            if (filteredHits.Count > 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"Top score: {filteredHits[0].Score:F4}");
+            }
 
             return Ok(resp);
         }
@@ -221,6 +266,69 @@ public sealed class SearchController : ControllerBase
         }
     }
 
+    private static string? ReadStr(object? raw)
+    {
+        return raw switch
+        {
+            string s => s,
+            System.Text.Json.JsonElement j => j.ValueKind == System.Text.Json.JsonValueKind.String ? j.GetString() : null,
+            _ => raw?.ToString()
+        };
+    }
+
+    private static string? TryPreviewFromPayload(IReadOnlyDictionary<string, object?>? payload)
+    {
+#pragma warning disable CA1416 // Drawing APIs are Windows-only
+        try
+        {
+            if (payload is null) return null;
+            if (!payload.TryGetValue("absolutePath", out var raw) && !payload.TryGetValue("path", out raw))
+                return null;
+            var path = ReadStr(raw);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                System.Diagnostics.Debug.WriteLine($"TryPreviewFromPayload: Path is null or empty");
+                return null;
+            }
+            if (!System.IO.File.Exists(path))
+            {
+                System.Diagnostics.Debug.WriteLine($"TryPreviewFromPayload: File does not exist: {path}");
+                return null;
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"TryPreviewFromPayload: Attempting to load image: {path}");
+            using var src = new Bitmap(path);
+            const int maxSide = 256;
+            var scale = Math.Min((double)maxSide / src.Width, (double)maxSide / src.Height);
+            if (scale > 1) scale = 1;
+            var w = Math.Max(1, (int)(src.Width * scale));
+            var h = Math.Max(1, (int)(src.Height * scale));
+            using var resized = new Bitmap(w, h);
+            using (var g = Graphics.FromImage(resized))
+            {
+                g.DrawImage(src, 0, 0, w, h);
+            }
+            using var ms = new MemoryStream();
+            resized.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
+            var result = "data:image/jpeg;base64," + Convert.ToBase64String(ms.ToArray());
+            System.Diagnostics.Debug.WriteLine($"TryPreviewFromPayload: Successfully generated preview for {path} (size: {result.Length} chars)");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            string? pathStr = null;
+            if (payload != null)
+            {
+                if (payload.TryGetValue("absolutePath", out var raw1))
+                    pathStr = ReadStr(raw1);
+                else if (payload.TryGetValue("path", out var raw2))
+                    pathStr = ReadStr(raw2);
+            }
+            System.Diagnostics.Debug.WriteLine($"TryPreviewFromPayload: Exception for path '{pathStr}': {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+#pragma warning restore CA1416
+    }
 
     
 

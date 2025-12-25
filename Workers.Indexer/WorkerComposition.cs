@@ -45,6 +45,7 @@ public static class WorkerComposition
         services.AddSingleton<IAlbumRepository, AlbumRepository>();
         services.AddSingleton<IAlbumClusterRepository, AlbumClusterRepository>();
         services.AddSingleton<IReviewRepository, ReviewRepository>();
+        services.AddSingleton<IFaceReviewRepository, FaceReviewRepository>();
 
         services.AddSingleton<AlbumFinalizerService>();
         services.AddSingleton<AlbumReviewService>();

@@ -10,7 +10,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Polly;
-using Polly.Retry;
 using Policy = Polly.Policy;
 namespace FaceSearch.Infrastructure.Embedder;
 
@@ -19,6 +18,7 @@ public interface IEmbedderClient
     Task<float[]> EmbedTextAsync(string text, CancellationToken ct = default);
     Task<float[]> EmbedImageAsync(Stream imageStream, string fileName, CancellationToken ct = default);
     Task<float[]> EmbedFaceAsync(Stream imageStream, string fileName, CancellationToken ct = default);
+    Task<IReadOnlyList<FaceDetectionResult>> DetectFacesAsync(Stream imageStream, string fileName, bool femaleOnly = true, CancellationToken ct = default);
 
     // Add these two diagnostics endpoints
     Task<StatusResponse> GetStatusAsync(CancellationToken ct = default);
@@ -106,6 +106,22 @@ public sealed class EmbedderClient : IEmbedderClient
             resp.EnsureSuccessStatusCode();
             var doc = await resp.Content.ReadFromJsonAsync<EmbedResponse>(cancellationToken: token);
             return doc!.vector;
+        }, ct);
+
+    public Task<IReadOnlyList<FaceDetectionResult>> DetectFacesAsync(
+        Stream imageStream,
+        string fileName,
+        bool femaleOnly = true,
+        CancellationToken ct = default) =>
+        _retry.ExecuteAsync(async token =>
+        {
+            using var form = new MultipartFormDataContent();
+            form.Add(new StreamContent(imageStream), "file", fileName);
+
+            var resp = await _http.PostAsync($"/embed/face/multi?female_only={(femaleOnly ? "true" : "false")}", form, token);
+            resp.EnsureSuccessStatusCode();
+            var doc = await resp.Content.ReadFromJsonAsync<FaceDetectionsResponse>(cancellationToken: token);
+            return (IReadOnlyList<FaceDetectionResult>)(doc?.Faces ?? Array.Empty<FaceDetectionResult>());
         }, ct);
 
     private sealed class EmbedResponse

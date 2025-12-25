@@ -52,6 +52,14 @@ namespace FaceSearch.Infrastructure.Embedder
         [JsonPropertyName("faces_found")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int? FacesFound { get; set; }
+
+        [JsonPropertyName("gender")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public string? Gender { get; set; }
+
+        [JsonPropertyName("gender_score")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public double? GenderScore { get; set; }
     }
 
     // ---- Status / Selftest ----
@@ -77,5 +85,20 @@ namespace FaceSearch.Infrastructure.Embedder
         [JsonPropertyName("timings_ms")] public Timings? Timing { get; set; }
         public bool Passed { get; set; }
         public string? Details { get; set; }
+    }
+
+    // ---- Multi-face detection with gender ----
+    public sealed class FaceDetectionResult
+    {
+        [JsonPropertyName("vector")] public float[] Vector { get; set; } = Array.Empty<float>();
+        [JsonPropertyName("gender")] public string? Gender { get; set; }
+        [JsonPropertyName("gender_score")] public double? GenderScore { get; set; }
+        [JsonPropertyName("bbox")] public int[]? Bbox { get; set; }
+    }
+
+    public sealed class FaceDetectionsResponse
+    {
+        [JsonPropertyName("faces")] public FaceDetectionResult[] Faces { get; set; } = Array.Empty<FaceDetectionResult>();
+        [JsonPropertyName("count")] public int Count { get; set; }
     }
 }

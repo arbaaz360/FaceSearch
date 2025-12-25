@@ -56,6 +56,8 @@ public sealed class AlbumFinalizerService
         var (top, ratio, albumDoc) = await ComputeAndUpsertAlbumAsync(
             albumId, imageCount, faceImageCount, clusterDocs, ct);
 
+        DuplicateCheckResult? duplicate = null;
+
         // 7) If we have a dominant cluster, build centroid for cross-album checks
         if (top is not null)
         {
@@ -65,15 +67,17 @@ public sealed class AlbumFinalizerService
                 var centroid = dominantVectors.Mean512();
 
                 // 7a) Check if another album’s dominant matches this one (duplicate/alt profile)
-                var dup = await DetectDuplicateAlbumAsync(albumId, top.ClusterId, ratio, centroid, ct);
+                duplicate = await DetectDuplicateAlbumAsync(albumId, top.ClusterId, ratio, centroid, ct);
 
                 // (Optional) Persist a review or mark album fields if your Album schema has them
-                await PersistDuplicateReviewIfAnyAsync(dup, ct);
+                await PersistDuplicateReviewIfAnyAsync(duplicate, ct);
 
                 // 7b) Upsert (or refresh) this album’s dominant centroid to Qdrant
                 await UpsertAlbumDominantAsync(albumId, top.ClusterId, ratio, dominantVectors.Count, centroid, ct);
             }
         }
+
+        await UpdateMergeCandidateFlagsAsync(albumDoc, duplicate, ct);
 
         return albumDoc;
     }
@@ -252,7 +256,7 @@ public sealed class AlbumFinalizerService
             {
                 ClusterId = top.ClusterId,
                 Ratio = ratio,
-                SampleFaceId = top.SampleFaceIds.FirstOrDefault(),
+                SampleFaceId = top.SampleFaceIds?.FirstOrDefault() ?? string.Empty,
                 ImageCount = top.ImageCount
             },
             SuspiciousAggregator = ratio < _opt.AggregatorThreshold,
@@ -348,6 +352,7 @@ public sealed class AlbumFinalizerService
         {
             var review = new ReviewMongo
             {
+                Id = Guid.NewGuid().ToString("n"), // Set Id to prevent null _id in MongoDB
                 Type = ReviewType.AlbumMerge,
                 Status = ReviewStatus.pending,
                 Kind = "identity",
@@ -391,6 +396,29 @@ public sealed class AlbumFinalizerService
         await _qdrant.UpsertAsync(
             "album_dominants",
             new[] { (pointId, centroid, (IDictionary<string, object?>)payload) },
+            ct);
+    }
+
+    private Task UpdateMergeCandidateFlagsAsync(
+        AlbumMongo album,
+        DuplicateCheckResult? duplicate,
+        CancellationToken ct)
+    {
+        var duplicateAlbumId = duplicate?.TargetAlbumId ?? string.Empty;
+        var duplicateClusterId = duplicate?.TargetClusterId ?? string.Empty;
+        var hasDuplicate = !string.IsNullOrWhiteSpace(duplicateAlbumId);
+
+        album.isSuspectedMergeCandidate = hasDuplicate;
+        album.existingSuspectedDuplicateAlbumId = duplicateAlbumId;
+        album.existingSuspectedDuplicateClusterId = duplicateClusterId;
+        album.UpdatedAt = DateTime.UtcNow;
+
+        return _albums.UpdateMergeCandidateFlagsAsync(
+            album.Id,
+            album.isSuspectedMergeCandidate,
+            album.existingSuspectedDuplicateAlbumId,
+            album.existingSuspectedDuplicateClusterId,
+            album.UpdatedAt,
             ct);
     }
 

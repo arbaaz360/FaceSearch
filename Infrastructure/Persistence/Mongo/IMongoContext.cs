@@ -11,5 +11,6 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
         IMongoCollection<AlbumMongo> Albums { get; }
         IMongoCollection<AlbumClusterMongo> AlbumClusters { get; }
         IMongoCollection<ReviewMongo> Reviews { get; }
+        IMongoCollection<FaceReviewMongo> FaceReviews { get; }
     }
 }

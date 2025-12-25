@@ -1,0 +1,88 @@
+@echo off
+setlocal EnableDelayedExpansion
+title FaceSearch - Starting All Services
+
+REM -------- Paths --------
+set SCRIPT_DIR=%~dp0
+cd /d "%SCRIPT_DIR%"
+
+echo ========================================
+echo   FaceSearch - Starting All Services
+echo ========================================
+echo.
+
+REM -------- Step 1: Start Docker Infrastructure --------
+echo [1/4] Starting Docker infrastructure (MongoDB + Qdrant)...
+docker-compose up -d
+if errorlevel 1 (
+    echo [ERROR] Failed to start Docker containers. Make sure Docker Desktop is running.
+    pause
+    exit /b 1
+)
+echo [OK] Docker containers started
+timeout /t 3 /nobreak >nul
+echo.
+
+REM -------- Step 2: Start Python Embedder --------
+echo [2/4] Starting Python Embedder service...
+start "FaceSearch-Embedder" /D "%SCRIPT_DIR%embedder" cmd /k "title FaceSearch-Embedder && call start.bat"
+timeout /t 5 /nobreak >nul
+echo [OK] Embedder service starting (check embedder window)
+echo.
+
+REM -------- Step 3: Start .NET API --------
+echo [3/4] Starting .NET API...
+start "FaceSearch-API" /D "%SCRIPT_DIR%FaceSearch" cmd /k "title FaceSearch-API && dotnet run"
+timeout /t 3 /nobreak >nul
+echo [OK] API starting (check API window)
+echo.
+
+REM -------- Step 4: Start .NET Worker --------
+echo [4/5] Starting .NET Worker (Indexer)...
+start "FaceSearch-Worker" /D "%SCRIPT_DIR%Workers.Indexer" cmd /k "title FaceSearch-Worker && dotnet run"
+timeout /t 2 /nobreak >nul
+echo [OK] Worker starting (check Worker window)
+echo.
+
+REM -------- Step 5: Start React Frontend --------
+echo [5/5] Starting React Frontend...
+if not exist "%SCRIPT_DIR%frontend\node_modules" (
+    echo [INFO] Installing frontend dependencies (first time setup)...
+    cd /d "%SCRIPT_DIR%frontend"
+    call npm install
+    if errorlevel 1 (
+        echo [ERROR] Failed to install frontend dependencies.
+        echo         Frontend will be skipped.
+        cd /d "%SCRIPT_DIR%"
+        goto :skip_frontend
+    )
+    cd /d "%SCRIPT_DIR%"
+    echo [OK] Frontend dependencies installed
+)
+start "FaceSearch-Frontend" /D "%SCRIPT_DIR%frontend" cmd /k "title FaceSearch-Frontend && npm run dev"
+timeout /t 2 /nobreak >nul
+echo [OK] Frontend starting (check Frontend window)
+:skip_frontend
+echo.
+
+echo ========================================
+echo   All services are starting!
+echo ========================================
+echo.
+echo Services:
+echo   - MongoDB:     http://localhost:27017
+echo   - Qdrant:      http://localhost:6333
+echo   - Embedder:    http://localhost:8090
+echo   - API:         http://localhost:5240
+echo   - Swagger UI:  http://localhost:5240/swagger
+echo   - React UI:    http://localhost:3000
+echo   - Review UI:   http://localhost:5240/review.html
+echo.
+echo Check the opened windows for service status.
+echo.
+echo To stop all services:
+echo   1. Close all service windows (Ctrl+C in each)
+echo   2. Run: docker-compose down
+echo.
+pause
+

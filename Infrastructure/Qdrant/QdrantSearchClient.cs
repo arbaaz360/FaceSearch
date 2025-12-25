@@ -2,7 +2,6 @@
 using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Net.Http.Json;
-using System.Net.Http.Json;
 using System.Text.Json;
 
 
@@ -50,6 +49,63 @@ public sealed class QdrantSearchClient
     {
         if (await CollectionExistsAsync(name, ct)) return;
         await CreateCollectionAsync(name, vectorSize, distance, ct);
+    }
+
+    public async Task DeleteCollectionAsync(string name, CancellationToken ct = default)
+    {
+        using var resp = await _http.DeleteAsync($"/collections/{Uri.EscapeDataString(name)}", ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            _log.LogInformation("Qdrant collection {Name} does not exist, skipping deletion", name);
+            return;
+        }
+        if (!resp.IsSuccessStatusCode)
+        {
+            var err = await resp.Content.ReadAsStringAsync(ct);
+            _log.LogError("Qdrant DeleteCollection failed: {Status} {Body}", resp.StatusCode, err);
+            resp.EnsureSuccessStatusCode();
+        }
+        _log.LogInformation("Qdrant collection {Name} deleted successfully", name);
+    }
+
+    public async Task<Dictionary<string, object?>?> GetPointPayloadAsync(string collection, string pointId, CancellationToken ct = default)
+    {
+        var url = $"/collections/{Uri.EscapeDataString(collection)}/points/{Uri.EscapeDataString(pointId)}";
+        using var resp = await _http.GetAsync(url, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            _log.LogInformation("Qdrant point {PointId} not found in collection {Collection}", pointId, collection);
+            return null;
+        }
+        if (!resp.IsSuccessStatusCode)
+        {
+            var err = await resp.Content.ReadAsStringAsync(ct);
+            _log.LogError("Qdrant GetPoint failed: {Status} {Body}", resp.StatusCode, err);
+            resp.EnsureSuccessStatusCode();
+        }
+
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        
+        if (doc.RootElement.TryGetProperty("result", out var result) && 
+            result.TryGetProperty("payload", out var payload))
+        {
+            var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in payload.EnumerateObject())
+            {
+                dict[prop.Name] = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString(),
+                    JsonValueKind.Number => prop.Value.GetDouble(),
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    JsonValueKind.Null => null,
+                    _ => prop.Value.ToString()
+                };
+            }
+            return dict;
+        }
+        return null;
     }
 }
 

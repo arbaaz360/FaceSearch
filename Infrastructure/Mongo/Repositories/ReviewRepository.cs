@@ -32,4 +32,18 @@ public sealed class ReviewRepository : IReviewRepository
         await _col.InsertOneAsync(review, cancellationToken: ct);
         return true;
     }
+
+    public async Task<ReviewMongo?> GetAsync(string reviewId, CancellationToken ct = default)
+    {
+        var result = await _col.Find(x => x.Id == reviewId).FirstOrDefaultAsync(ct);
+        return result;
+    }
+
+    public Task UpdateStatusAsync(string reviewId, ReviewStatus status, CancellationToken ct = default)
+    {
+        var update = Builders<ReviewMongo>.Update
+            .Set(x => x.Status, status)
+            .Set(x => x.ResolvedAt, DateTime.UtcNow);
+        return _col.UpdateOneAsync(x => x.Id == reviewId, update, cancellationToken: ct);
+    }
 }

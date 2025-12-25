@@ -20,6 +20,7 @@ public sealed class QdrantCollectionBootstrap
         await EnsureCollectionAsync(new CollectionSpec("clip_512", 512, "Cosine"), ct);
         await EnsureCollectionAsync(new CollectionSpec("faces_arcface_512", 512, "Cosine"), ct);
         await EnsureCollectionAsync(new CollectionSpec("album_dominants", 512, "Cosine"), ct);
+        await EnsureCollectionAsync(new CollectionSpec("faces_review_512", 512, "Cosine"), ct);
     }
 
     private async Task EnsureCollectionAsync(CollectionSpec spec, CancellationToken ct)

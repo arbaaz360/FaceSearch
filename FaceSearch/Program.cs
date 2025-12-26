@@ -46,6 +46,7 @@ builder.Services.AddSingleton<MongoBootstrap>();
 builder.Services.AddScoped<ISearchService, SearchService>();
 builder.Services.AddScoped<ISeedingService, SeedingService>();
 builder.Services.AddScoped<IInstagramSeedingService, InstagramSeedingService>();
+builder.Services.AddScoped<Contracts.Indexing.IPostFetchService, PostFetchService>();
 
 builder.Services.AddScoped<IImageRepository, ImageRepository>();
 builder.Services.AddScoped<IAlbumRepository, AlbumRepository>();
@@ -76,7 +77,17 @@ builder.Logging.AddConsole();
 
 var app = builder.Build();
 
-app.Logger.LogInformation("Embedder BaseUrl: {Base}", app.Services.GetRequiredService<EmbedderOptions>().BaseUrl);
+// Log embedder configuration
+var embedderOpts = app.Services.GetRequiredService<EmbedderOptions>();
+if (embedderOpts.BaseUrls != null && embedderOpts.BaseUrls.Length > 1)
+{
+    app.Logger.LogInformation("Embedder: Load-balanced with {Count} instances: {Urls}", 
+        embedderOpts.BaseUrls.Length, string.Join(", ", embedderOpts.BaseUrls));
+}
+else
+{
+    app.Logger.LogInformation("Embedder BaseUrl: {Base}", embedderOpts.BaseUrl);
+}
 
 // ---------- Startup bootstraps ----------
 using (var scope = app.Services.CreateScope())

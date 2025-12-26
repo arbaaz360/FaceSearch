@@ -109,11 +109,13 @@ export const whoIsThis = async (file, threshold = 0.72, topK = 5) => {
 }
 
 // Indexing
-export const seedDirectory = async (directoryPath, albumId, includeVideos = false) => {
+export const seedDirectory = async (directoryPath, albumId, includeVideos = false, seedSubdirectoriesAsAlbums = false) => {
   const { data } = await api.post('/index/seed-directory', {
     directoryPath,
-    albumId,
+    albumId: seedSubdirectoriesAsAlbums ? null : albumId,
     includeVideos,
+    seedSubdirectoriesAsAlbums,
+    recursive: true, // Always recursive for subdirectories mode
   })
   return data
 }
@@ -150,6 +152,25 @@ export const resetSingleInstagramAccount = async (username, deleteImages = false
       deleteImages,
     },
   })
+  return data
+}
+
+// Post Fetch
+export const getUsernamesWithoutPosts = async () => {
+  const { data } = await api.get('/post-fetch/usernames-without-posts')
+  return data
+}
+
+export const fetchPosts = async (usernames, targetUsername = null) => {
+  const { data } = await api.post('/post-fetch/fetch', {
+    usernames,
+    targetUsername,
+  })
+  return data
+}
+
+export const getFetchStatus = async (fetchId) => {
+  const { data } = await api.get(`/post-fetch/status/${fetchId}`)
   return data
 }
 

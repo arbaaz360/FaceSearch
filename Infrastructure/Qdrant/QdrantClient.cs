@@ -148,23 +148,65 @@ public sealed class QdrantClient : IQdrantClient
         };
 
         var url = $"/collections/{Uri.EscapeDataString(collection)}/points/search";
-        var resp = await _http.PostAsJsonAsync(url, body, ct);
 
-        if (resp.StatusCode == HttpStatusCode.NotFound)
+        var attempt = 0;
+        var sw = Stopwatch.StartNew();
+
+        while (true)
         {
-            _log?.LogWarning("Qdrant search 404: collection '{Collection}' not found", collection);
-            return new List<QdrantPoint>(); // treat as empty – first-run bootstrap-safe
-        }
+            attempt++;
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_opt.TimeoutSeconds));
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, cts.Token);
 
-        if (!resp.IsSuccessStatusCode)
-        {
-            var txt = await resp.Content.ReadAsStringAsync(ct);
-            _log?.LogError("Qdrant search failed ({Status}) on {Collection}: {Body}", resp.StatusCode, collection, txt);
-            resp.EnsureSuccessStatusCode();
-        }
+                using var req = new HttpRequestMessage(HttpMethod.Post, url)
+                {
+                    Content = JsonContent.Create(body)
+                };
 
-        var doc = await resp.Content.ReadFromJsonAsync<QdrantSearchResponse>(cancellationToken: ct);
-        return doc?.result ?? new List<QdrantPoint>();
+                using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, linked.Token);
+
+                if (resp.StatusCode == HttpStatusCode.NotFound)
+                {
+                    _log?.LogWarning("Qdrant search 404: collection '{Collection}' not found", collection);
+                    return new List<QdrantPoint>(); // treat as empty - first-run bootstrap-safe
+                }
+
+                if (IsTransient(resp.StatusCode) && attempt <= _opt.MaxRetries)
+                {
+                    await DelayBackoffAsync(attempt, linked.Token);
+                    continue;
+                }
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var txt = await resp.Content.ReadAsStringAsync(linked.Token);
+                    _log?.LogError("Qdrant search failed ({Status}) on {Collection}: {Body}", resp.StatusCode, collection, txt);
+                    resp.EnsureSuccessStatusCode();
+                }
+
+                await using var stream = await resp.Content.ReadAsStreamAsync(linked.Token);
+                var doc = await JsonSerializer.DeserializeAsync<QdrantSearchResponse>(stream, _json, linked.Token);
+
+                _log?.LogDebug("Qdrant search {Collection} topK={Limit} in {Ms} ms (attempt {Attempt})",
+                    collection, limit, sw.ElapsedMilliseconds, attempt);
+
+                return doc?.result ?? new List<QdrantPoint>();
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested && attempt <= _opt.MaxRetries)
+            {
+                _log?.LogWarning("Qdrant search timeout; retrying (attempt {Attempt}/{Max})", attempt, _opt.MaxRetries);
+                await DelayBackoffAsync(attempt, ct);
+                continue;
+            }
+            catch (HttpRequestException ex) when (attempt <= _opt.MaxRetries)
+            {
+                _log?.LogWarning(ex, "Qdrant HTTP error; retrying (attempt {Attempt}/{Max})", attempt, _opt.MaxRetries);
+                await DelayBackoffAsync(attempt, ct);
+                continue;
+            }
+        }
     }
 
     public async Task<IReadOnlyList<(string id, double score, Dictionary<string, object?>? payload)>>
@@ -177,7 +219,8 @@ public sealed class QdrantClient : IQdrantClient
             Vector = vector,
             Limit = limit,
             WithPayload = true,
-            WithVector = false
+            WithVector = false,
+            ScoreThreshold = 0.40 // Skip very low similarity matches to speed up search
         };
 
         if (!string.IsNullOrWhiteSpace(albumIdFilter))

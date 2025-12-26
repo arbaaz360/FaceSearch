@@ -34,14 +34,28 @@ REM -------- Step 2: Start Python Embedder --------
 echo [2/5] Starting Python Embedder service...
 start "FaceSearch-Embedder" /D "%SCRIPT_DIR%embedder" cmd /k "title FaceSearch-Embedder && call start.bat"
 timeout /t 5 /nobreak >nul
-echo [OK] Embedder service starting (check embedder window)
+echo [CHECK] Waiting for embedder health (http://localhost:8090/_status)...
+powershell -NoProfile -Command ^
+    "$u='http://localhost:8090/_status'; $deadline=(Get-Date).AddSeconds(240); while((Get-Date) -lt $deadline){ try { $res=Invoke-RestMethod -Uri $u -TimeoutSec 5; Write-Host \"[OK] Embedder online (clip_device=$($res.clip_device); face_device=$($res.face_device))\"; exit 0 } catch { Start-Sleep -Seconds 3 } }; Write-Warning 'Embedder did not respond on port 8090 within 240s'; exit 1"
+if errorlevel 1 (
+    echo [WARN] Embedder health check failed. See embedder\embedder.log or the embedder window.
+) else (
+    echo [OK] Embedder responded.
+)
 echo.
 
 REM -------- Step 3: Start .NET API with WATCH --------
 echo [3/5] Starting .NET API (WATCH MODE - auto-restart on changes)...
 start "FaceSearch-API" /D "%SCRIPT_DIR%FaceSearch" cmd /k "title FaceSearch-API && dotnet watch run"
 timeout /t 3 /nobreak >nul
-echo [OK] API starting with watch mode (check API window)
+echo [CHECK] Waiting for API health (http://localhost:5240/healthz)...
+powershell -NoProfile -Command ^
+    "$u='http://localhost:5240/healthz'; $deadline=(Get-Date).AddSeconds(60); while((Get-Date) -lt $deadline){ try { $res=Invoke-RestMethod -Uri $u -TimeoutSec 5; if($res.ok -eq $true){ Write-Host '[OK] API healthy'; exit 0 } } catch { Start-Sleep -Seconds 2 } }; Write-Warning 'API not responding on port 5240 within 60s'; exit 1"
+if errorlevel 1 (
+    echo [WARN] API health check failed. Check the API window for errors.
+) else (
+    echo [OK] API responded.
+)
 echo.
 
 REM -------- Step 4: Start .NET Worker with WATCH --------

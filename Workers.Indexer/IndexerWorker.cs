@@ -61,6 +61,9 @@ namespace FaceSearch.Workers.Indexer
             _log.LogInformation("Indexer started: batchSize={Batch} interval={Interval}s clip={Clip} face={Face}",
                 _opts.BatchSize, _opts.IntervalSeconds, _opts.EnableClip, _opts.EnableFace);
 
+            // Wait for at least one embedder instance to be available before starting
+            await WaitForEmbedderAsync(stoppingToken);
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
@@ -130,7 +133,8 @@ namespace FaceSearch.Workers.Indexer
                                     var sanitizedFileName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
                                     tempFilePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}_{sanitizedFileName}");
                                     await System.IO.File.WriteAllBytesAsync(tempFilePath, imageBytes, imageCt);
-                                    imageStream = new FileStream(tempFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16, FileOptions.SequentialScan | FileOptions.DeleteOnClose);
+                                    // Don't use DeleteOnClose - we'll delete manually in finally block
+                                    imageStream = new FileStream(tempFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16, FileOptions.SequentialScan);
                                     _log.LogDebug("Downloaded image {Id} ({Size} bytes)", img.Id, imageBytes.Length);
                                 }
                                 else
@@ -157,36 +161,51 @@ namespace FaceSearch.Workers.Indexer
 
                                 var producedAny = false;
 
-                                // ---- CLIP ----
-                                if (_opts.EnableClip)
+                                // Copy stream to MemoryStream to avoid disposal issues during async HTTP requests
+                                // StreamContent reads lazily, so we need to keep the stream alive until the request completes
+                                MemoryStream? memoryStream = null;
+                                try
                                 {
-                                    imageStream.Position = 0; // Reset stream position
-                                    var clipVec = await _embedder.EmbedImageAsync(imageStream, fileName, imageCt);
-                                    if (clipVec is { Length: > 0 })
+                                    imageStream.Position = 0;
+                                    memoryStream = new MemoryStream();
+                                    await imageStream.CopyToAsync(memoryStream, imageCt);
+                                    memoryStream.Position = 0;
+
+                                    // ---- CLIP ----
+                                    if (_opts.EnableClip)
                                     {
-                                        L2NormalizeInPlace(clipVec);
-                                        clipPoints.Add((pointId, clipVec, basePayload));
-                                        producedAny = true;
+                                        memoryStream.Position = 0; // Reset stream position
+                                        var clipVec = await _embedder.EmbedImageAsync(memoryStream, fileName, imageCt);
+                                        if (clipVec is { Length: > 0 })
+                                        {
+                                            L2NormalizeInPlace(clipVec);
+                                            clipPoints.Add((pointId, clipVec, basePayload));
+                                            producedAny = true;
+                                        }
+                                    }
+
+                                    // ---- FACE ----
+                                    if (_opts.EnableFace)
+                                    {
+                                        memoryStream.Position = 0; // Reset stream position
+                                        var faceVec = await _embedder.EmbedFaceAsync(memoryStream, fileName, imageCt);
+                                        if (faceVec is { Length: > 0 })
+                                        {
+                                            L2NormalizeInPlace(faceVec);
+                                            await _images.SetHasPeopleAsync(img.Id, true, imageCt);
+                                            var payload = new Dictionary<string, object?>(basePayload);
+                                            // NOTE: do NOT set albumClusterId here anymore - it will be set later during batch processing
+                                            // payload["albumClusterId"] = null;
+
+                                            // Add to facePoints collection for batch processing (clusterId enrichment happens later)
+                                            facePoints.Add((pointId, faceVec, payload));
+                                            producedAny = true;
+                                        }
                                     }
                                 }
-
-                                // ---- FACE ----
-                                if (_opts.EnableFace)
+                                finally
                                 {
-                                    imageStream.Position = 0; // Reset stream position
-                                    var faceVec = await _embedder.EmbedFaceAsync(imageStream, fileName, imageCt);
-                                    if (faceVec is { Length: > 0 })
-                                    {
-                                        L2NormalizeInPlace(faceVec);
-                                        await _images.SetHasPeopleAsync(img.Id, true, imageCt);
-                                        var payload = new Dictionary<string, object?>(basePayload);
-                                        // NOTE: do NOT set albumClusterId here anymore - it will be set later during batch processing
-                                        // payload["albumClusterId"] = null;
-
-                                        // Add to facePoints collection for batch processing (clusterId enrichment happens later)
-                                        facePoints.Add((pointId, faceVec, payload));
-                                        producedAny = true;
-                                    }
+                                    memoryStream?.Dispose();
                                 }
 
                                 if (producedAny)
@@ -221,23 +240,43 @@ namespace FaceSearch.Workers.Indexer
 
                     // ---- Upsert to Qdrant ----
                     // ---- Enrich FACE points with clusterId before upsert ----
-                    foreach (var p in facePoints)
+                    if (facePoints.Count > 0)
                     {
-                        try
+                        _log.LogInformation("Resolving cluster IDs for {Count} face points in parallel...", facePoints.Count);
+                        var clusterResolved = 0;
+                        var lockObj = new object();
+                        
+                        // Process cluster resolution in parallel to speed up Qdrant searches
+                        var clusterTasks = facePoints.Select(async p =>
                         {
-                            if (p.payload is Dictionary<string, object?> payload &&
-                                payload.TryGetValue("albumId", out var aidObj) &&
-                                aidObj is string albumId &&
-                                !string.IsNullOrEmpty(albumId))
+                            try
                             {
-                                var clusterId = await ResolveAlbumClusterIdAsync(albumId, p.vec, stoppingToken);
-                                payload["albumClusterId"] = clusterId;
+                                if (p.payload is Dictionary<string, object?> payload &&
+                                    payload.TryGetValue("albumId", out var aidObj) &&
+                                    aidObj is string albumId &&
+                                    !string.IsNullOrEmpty(albumId))
+                                {
+                                    var clusterId = await ResolveAlbumClusterIdAsync(albumId, p.vec, stoppingToken);
+                                    payload["albumClusterId"] = clusterId;
+                                    
+                                    lock (lockObj)
+                                    {
+                                        clusterResolved++;
+                                        if (clusterResolved % 50 == 0)
+                                        {
+                                            _log.LogInformation("Resolved {Resolved}/{Total} cluster IDs...", clusterResolved, facePoints.Count);
+                                        }
+                                    }
+                                }
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            _log.LogError(ex, "Failed to resolve cluster for point {Id}", p.id);
-                        }
+                            catch (Exception ex)
+                            {
+                                _log.LogError(ex, "Failed to resolve cluster for point {Id}", p.id);
+                            }
+                        }).ToArray();
+                        
+                        await Task.WhenAll(clusterTasks);
+                        _log.LogInformation("Completed resolving cluster IDs for {Count} face points", clusterResolved);
                     }
 
                     // ---- Upsert to Qdrant ----
@@ -289,8 +328,6 @@ namespace FaceSearch.Workers.Indexer
                     var markedOk = 0; var skipped = 0;
                     foreach (var kv in readyImageIds)
                     {
-                        _log.LogInformation("BATCH pulled={Count}", batch.Count);
-                        _log.LogInformation("PRODUCED clip={Clip} face={Face}", clipPoints.Count, facePoints.Count);
                         var imageId = kv.Key;
                         if (upsertedImageIds.Contains(imageId))
                         {
@@ -305,7 +342,8 @@ namespace FaceSearch.Workers.Indexer
                       
 
                     }
-                    _log.LogInformation("MARK embedded={Ok} skipped={Skip}", markedOk, skipped);
+                    _log.LogInformation("BATCH COMPLETE: pulled={Pulled} clip={Clip} face={Face} marked={Marked} skipped={Skipped}", 
+                        batch.Count, clipPoints.Count, facePoints.Count, markedOk, skipped);
 
 
                     // ---- Check if album completed & recompute dominance ----
@@ -369,7 +407,8 @@ namespace FaceSearch.Workers.Indexer
         private const double T_LOW = 0.56;   // fuzzy band – allow merge if consensus
         private const int MIN_NEIGHBORS = 2;      // need >=2 neighbors from same cluster
         private const double BEST_MARGIN = 0.05;   // best should beat runner-up by this
-        private const int TOPK = 30;     // already your limit
+        private const int TOPK = 15;     // Reduced from 30 to speed up searches (fewer results to process)
+        private const double MIN_SCORE_THRESHOLD = 0.40; // Skip searches if we expect no good matches
 
         private async Task<string> ResolveAlbumClusterIdAsync(
             string albumId,
@@ -446,6 +485,41 @@ namespace FaceSearch.Workers.Indexer
             for (int i = 0; i < v.Length; i++) s += v[i] * v[i];
             var inv = (float)(1.0 / Math.Sqrt(s + 1e-12));
             for (int i = 0; i < v.Length; i++) v[i] *= inv;
+        }
+
+        /// <summary>
+        /// Waits for at least one embedder instance to become available before starting to process images.
+        /// This prevents flooding logs with errors when embedders aren't running yet.
+        /// </summary>
+        private async Task WaitForEmbedderAsync(CancellationToken stoppingToken)
+        {
+            _log.LogInformation("Waiting for embedder service to become available...");
+            const int maxWaitSeconds = 300; // 5 minutes max wait
+            const int checkIntervalSeconds = 5;
+            var startTime = DateTime.UtcNow;
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var status = await _embedder.GetStatusAsync(stoppingToken);
+                    _log.LogInformation("Embedder service is available! Status: {Status}", status.Status);
+                    return; // Success - at least one embedder is available
+                }
+                catch (Exception ex)
+                {
+                    var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
+                    if (elapsed >= maxWaitSeconds)
+                    {
+                        _log.LogWarning("Embedder service not available after {Seconds}s. Starting anyway - images will fail until embedders are started.", maxWaitSeconds);
+                        return; // Give up waiting, but continue processing (will fail gracefully)
+                    }
+
+                    _log.LogDebug("Embedder service not available yet (elapsed: {Elapsed}s). Retrying in {Interval}s...", 
+                        (int)elapsed, checkIntervalSeconds);
+                    await Task.Delay(TimeSpan.FromSeconds(checkIntervalSeconds), stoppingToken);
+                }
+            }
         }
     }
 }

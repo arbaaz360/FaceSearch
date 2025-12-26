@@ -95,7 +95,18 @@ try:
 except Exception:
     pass
 
-print(f"[InsightFace] ready; active providers={FACE_PROVIDERS_USED or providers}")
+FACE_PROVIDERS_USED = FACE_PROVIDERS_USED or providers
+
+face_device_label = None
+if FACE_PROVIDERS_USED:
+    if "CUDAExecutionProvider" in FACE_PROVIDERS_USED:
+        face_device_label = "cuda"
+    elif "DmlExecutionProvider" in FACE_PROVIDERS_USED:
+        face_device_label = "directml"
+    else:
+        face_device_label = FACE_PROVIDERS_USED[0]
+
+print(f"[InsightFace] ready; active providers={FACE_PROVIDERS_USED}")
 
 # -------------------------------
 # Schemas
@@ -105,9 +116,11 @@ class TextRequest(BaseModel):
 # -------------------------------
 # Debug/status endpoint
 # -------------------------------
-# add near your imports where device_label, face_app etc. are defined
-@app.get("/_status")
-async def status():
+import time
+
+
+def _status_payload():
+    status_value = "ok" if face_app is not None else "degraded"
     try:
         import onnxruntime as ort
         onnx_providers = ort.get_available_providers()
@@ -115,40 +128,65 @@ async def status():
         onnx_providers = None
 
     return {
+        "status": status_value,
         "clip_device": device_label,
+        "face_device": face_device_label,
         "insightface_loaded": face_app is not None,
-        "insightface_active_providers": face_provider_used if 'face_provider_used' in globals() else None,
+        "insightface_active_providers": FACE_PROVIDERS_USED,
         "onnx_available_providers": onnx_providers,
     }
-import time
+
+
+@app.get("/_status")
+async def status():
+    return _status_payload()
+
+
+@app.get("/status")
+async def status_alias():
+    return _status_payload()
 
 @app.get("/_selftest")
 async def selftest():
-    # text -> CLIP
-    t0 = time.time()
-    tokens = open_clip.tokenize(["a red skirt on a mannequin"]).to(device)
-    with torch.no_grad():
-        v_text = clip_model.encode_text(tokens).float()
-        v_text /= v_text.norm(dim=-1, keepdim=True)
-    t1 = time.time()
-
-    # image -> CLIP (dummy 224x224)
-    import numpy as np
-    from PIL import Image
-    dummy = Image.fromarray((np.random.rand(224,224,3)*255).astype('uint8'))
-    img_t = clip_preprocess(dummy).unsqueeze(0).to(device)
-    with torch.no_grad():
-        v_img = clip_model.encode_image(img_t).float()
-        v_img /= v_img.norm(dim=-1, keepdim=True)
-    t2 = time.time()
-
-    return {
+    result = {
         "clip_device": device_label,
-        "timings_ms": {
-            "text_embed": round((t1 - t0)*1000, 2),
-            "image_embed": round((t2 - t1)*1000, 2),
-        }
+        "face_device": face_device_label,
+        "timings_ms": {},
+        "passed": False,
     }
+
+    # text -> CLIP
+    try:
+        t0 = time.time()
+        tokens = open_clip.tokenize(["a red skirt on a mannequin"]).to(device)
+        with torch.no_grad():
+            v_text = clip_model.encode_text(tokens).float()
+            v_text /= v_text.norm(dim=-1, keepdim=True)
+        t1 = time.time()
+        result["timings_ms"]["text_embed"] = round((t1 - t0) * 1000, 2)
+
+        # image -> CLIP (dummy 224x224)
+        dummy = Image.fromarray((np.random.rand(224, 224, 3) * 255).astype('uint8'))
+        img_t = clip_preprocess(dummy).unsqueeze(0).to(device)
+        with torch.no_grad():
+            v_img = clip_model.encode_image(img_t).float()
+            v_img /= v_img.norm(dim=-1, keepdim=True)
+        t2 = time.time()
+        result["timings_ms"]["image_embed"] = round((t2 - t1) * 1000, 2)
+
+        # face detect (blank image just exercises the pipeline)
+        if face_app is not None:
+            blank = np.zeros((320, 320, 3), dtype=np.uint8)
+            _ = face_app.get(blank)
+            t3 = time.time()
+            result["timings_ms"]["face_embed"] = round((t3 - t2) * 1000, 2)
+        else:
+            result["timings_ms"]["face_embed"] = None
+        result["passed"] = True
+    except Exception as ex:
+        result["passed"] = False
+        result["details"] = str(ex)
+    return result
 @app.get("/_gpu")
 def gpu_status():
     try:
@@ -254,4 +292,5 @@ async def embed_face_multi(file: UploadFile = File(...), female_only: bool = Tru
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8090)
+    port = int(os.getenv("PORT", "8090"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

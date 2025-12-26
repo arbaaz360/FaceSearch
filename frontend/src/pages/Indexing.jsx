@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react'
-import { seedDirectory, seedInstagram, getInstagramStatus, resetInstagramIngestion, resetSingleInstagramAccount, factoryReset, resetErrors, getProcessingStats } from '../services/api'
+import { seedDirectory, seedInstagram, getInstagramStatus, resetInstagramIngestion, resetSingleInstagramAccount, factoryReset, resetErrors, getProcessingStats, getUsernamesWithoutPosts, fetchPosts, getFetchStatus } from '../services/api'
 import Pagination from '../components/Pagination'
 
 function Indexing() {
   const [directoryPath, setDirectoryPath] = useState('')
   const [albumId, setAlbumId] = useState('')
   const [includeVideos, setIncludeVideos] = useState(false)
+  const [seedSubdirectoriesAsAlbums, setSeedSubdirectoriesAsAlbums] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
 
   // Instagram ingestion state
-  const [activeTab, setActiveTab] = useState('directory') // 'directory' or 'instagram'
+  const [activeTab, setActiveTab] = useState('directory') // 'directory', 'instagram', or 'post-fetch'
   const [instagramTargetUsername, setInstagramTargetUsername] = useState('')
   const [instagramFollowingUsername, setInstagramFollowingUsername] = useState('')
   const [instagramIncludeVideos, setInstagramIncludeVideos] = useState(false)
@@ -26,16 +27,29 @@ function Indexing() {
   const [processingStats, setProcessingStats] = useState(null)
   const [loadingStats, setLoadingStats] = useState(false)
 
+  // Post Fetch state
+  const [usernamesWithoutPosts, setUsernamesWithoutPosts] = useState([])
+  const [loadingUsernames, setLoadingUsernames] = useState(false)
+  const [selectedUsernames, setSelectedUsernames] = useState(new Set())
+  const [fetchingPosts, setFetchingPosts] = useState(false)
+  const [fetchId, setFetchId] = useState(null)
+  const [fetchStatus, setFetchStatus] = useState(null)
+  const [postFetchTargetUsername, setPostFetchTargetUsername] = useState('')
+
   const handleSeed = async () => {
-    if (!directoryPath || !albumId) {
-      alert('Please provide both directory path and album ID')
+    if (!directoryPath) {
+      alert('Please provide directory path')
+      return
+    }
+    if (!seedSubdirectoriesAsAlbums && !albumId) {
+      alert('Please provide album ID (or enable "Seed Subdirectories as Albums")')
       return
     }
 
     setLoading(true)
     setResult(null)
     try {
-      const data = await seedDirectory(directoryPath, albumId, includeVideos)
+      const data = await seedDirectory(directoryPath, albumId, includeVideos, seedSubdirectoriesAsAlbums)
       setResult(data)
     } catch (error) {
       console.error('Seeding failed:', error)
@@ -126,6 +140,20 @@ function Indexing() {
     if (activeTab === 'instagram') {
       loadInstagramStatus()
       loadProcessingStats()
+    } else if (activeTab === 'post-fetch') {
+      // Auto-load usernames when switching to post-fetch tab
+      const loadUsernames = async () => {
+        setLoadingUsernames(true)
+        try {
+          const data = await getUsernamesWithoutPosts()
+          setUsernamesWithoutPosts(data || [])
+        } catch (error) {
+          console.error('Failed to load usernames:', error)
+        } finally {
+          setLoadingUsernames(false)
+        }
+      }
+      loadUsernames()
     }
   }, [activeTab, instagramTargetUsername])
 
@@ -160,6 +188,13 @@ function Indexing() {
         >
           Instagram Ingestion
         </button>
+        <button
+          className={`btn ${activeTab === 'post-fetch' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setActiveTab('post-fetch')}
+          style={{ borderRadius: '8px 8px 0 0', marginBottom: '-2px' }}
+        >
+          Post Fetch
+        </button>
       </div>
 
       {activeTab === 'directory' && (
@@ -176,13 +211,36 @@ function Indexing() {
             />
           </div>
           <div>
-            <label style={{ display: 'block', marginBottom: '4px' }}>Album ID</label>
+            <label style={{ display: 'block', marginBottom: '4px' }}>
+              Album ID <span className="text-muted">(ignored if "Seed Subdirectories as Albums" is enabled)</span>
+            </label>
             <input
               className="input"
               value={albumId}
               onChange={(e) => setAlbumId(e.target.value)}
               placeholder="my-album-id"
+              disabled={seedSubdirectoriesAsAlbums}
             />
+          </div>
+          <div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={seedSubdirectoriesAsAlbums}
+                onChange={(e) => {
+                  setSeedSubdirectoriesAsAlbums(e.target.checked)
+                  if (e.target.checked) {
+                    setAlbumId('') // Clear albumId when this mode is enabled
+                  }
+                }}
+              />
+              <span>
+                <strong>Seed Subdirectories as Albums</strong>
+                <span className="text-muted" style={{ display: 'block', fontSize: '12px', marginTop: '2px' }}>
+                  Each subdirectory will become a separate album (subdirectory name = albumId)
+                </span>
+              </span>
+            </label>
           </div>
           <div>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -197,9 +255,9 @@ function Indexing() {
           <button
             className="btn btn-primary"
             onClick={handleSeed}
-            disabled={loading || !directoryPath || !albumId}
+            disabled={loading || !directoryPath || (!seedSubdirectoriesAsAlbums && !albumId)}
           >
-            {loading ? 'Scanning...' : 'Seed Directory'}
+            {loading ? 'Scanning...' : seedSubdirectoriesAsAlbums ? 'Seed Subdirectories' : 'Seed Directory'}
           </button>
         </div>
 
@@ -655,6 +713,276 @@ function Indexing() {
               </>
             )}
           </div>
+        </>
+      )}
+
+      {activeTab === 'post-fetch' && (
+        <>
+          <div className="card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '18px', margin: 0 }}>Usernames Without Posts</h2>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={async () => {
+                    setLoadingUsernames(true)
+                    try {
+                      const data = await getUsernamesWithoutPosts()
+                      setUsernamesWithoutPosts(data || [])
+                    } catch (error) {
+                      console.error('Failed to load usernames:', error)
+                      alert('Failed to load usernames: ' + (error.response?.data?.error || error.message))
+                    } finally {
+                      setLoadingUsernames(false)
+                    }
+                  }}
+                  disabled={loadingUsernames}
+                >
+                  {loadingUsernames ? 'Loading...' : '🔄 Refresh'}
+                </button>
+              </div>
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', marginBottom: '4px' }}>
+                Target Username (Optional)
+              </label>
+              <input
+                className="input"
+                value={postFetchTargetUsername}
+                onChange={(e) => setPostFetchTargetUsername(e.target.value)}
+                placeholder="viralbhayani (optional, for tracking)"
+                style={{ width: '300px' }}
+              />
+            </div>
+            {usernamesWithoutPosts.length === 0 ? (
+              <p className="text-muted">No usernames found. Click Refresh to load.</p>
+            ) : (
+              <>
+                <div style={{ marginBottom: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      if (selectedUsernames.size === usernamesWithoutPosts.length) {
+                        setSelectedUsernames(new Set())
+                      } else {
+                        setSelectedUsernames(new Set(usernamesWithoutPosts.map(u => u.username)))
+                      }
+                    }}
+                    style={{ fontSize: '12px', padding: '4px 8px' }}
+                  >
+                    {selectedUsernames.size === usernamesWithoutPosts.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                  <span className="text-muted" style={{ fontSize: '12px' }}>
+                    {selectedUsernames.size} of {usernamesWithoutPosts.length} selected
+                  </span>
+                  <button
+                    className="btn btn-primary"
+                    onClick={async () => {
+                      if (selectedUsernames.size === 0) {
+                        alert('Please select at least one username')
+                        return
+                      }
+                      if (!confirm(`Fetch posts for ${selectedUsernames.size} username(s)? This will make API calls with 2 second delays between requests.`)) {
+                        return
+                      }
+                      setFetchingPosts(true)
+                      try {
+                        const result = await fetchPosts(Array.from(selectedUsernames), postFetchTargetUsername || null)
+                        setFetchId(result.fetchId)
+                        alert(`Post fetch initiated! Fetch ID: ${result.fetchId}\n\nThis will run in the background. Check the status below.`)
+                        // Start polling for status
+                        const pollInterval = setInterval(async () => {
+                          try {
+                            const status = await getFetchStatus(result.fetchId)
+                            setFetchStatus(status)
+                            if (status.status === 'completed' || status.status === 'cancelled') {
+                              clearInterval(pollInterval)
+                              setFetchingPosts(false)
+                              // Refresh the list
+                              const data = await getUsernamesWithoutPosts()
+                              setUsernamesWithoutPosts(data || [])
+                            }
+                          } catch (error) {
+                            console.error('Failed to get fetch status:', error)
+                          }
+                        }, 2000) // Poll every 2 seconds
+                        // Cleanup after 10 minutes
+                        setTimeout(() => clearInterval(pollInterval), 600000)
+                      } catch (error) {
+                        console.error('Failed to fetch posts:', error)
+                        alert('Failed to fetch posts: ' + (error.response?.data?.error || error.message))
+                        setFetchingPosts(false)
+                      }
+                    }}
+                    disabled={fetchingPosts || selectedUsernames.size === 0}
+                  >
+                    {fetchingPosts ? 'Fetching...' : `📥 Fetch Posts (${selectedUsernames.size})`}
+                  </button>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                        <th style={{ padding: '8px', textAlign: 'left', width: '40px' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedUsernames.size === usernamesWithoutPosts.length && usernamesWithoutPosts.length > 0}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedUsernames(new Set(usernamesWithoutPosts.map(u => u.username)))
+                              } else {
+                                setSelectedUsernames(new Set())
+                              }
+                            }}
+                          />
+                        </th>
+                        <th style={{ padding: '8px', textAlign: 'left' }}>Username</th>
+                        <th style={{ padding: '8px', textAlign: 'left' }}>Source</th>
+                        <th style={{ padding: '8px', textAlign: 'right' }}>Posts (Followings)</th>
+                        <th style={{ padding: '8px', textAlign: 'right' }}>Posts (Posts Collection)</th>
+                        <th style={{ padding: '8px', textAlign: 'left' }}>Reason</th>
+                        <th style={{ padding: '8px', textAlign: 'center', width: '120px' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {usernamesWithoutPosts.map((item, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                          <td style={{ padding: '8px', textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={selectedUsernames.has(item.username)}
+                              onChange={(e) => {
+                                const newSelected = new Set(selectedUsernames)
+                                if (e.target.checked) {
+                                  newSelected.add(item.username)
+                                } else {
+                                  newSelected.delete(item.username)
+                                }
+                                setSelectedUsernames(newSelected)
+                              }}
+                            />
+                          </td>
+                          <td style={{ padding: '8px' }}>{item.username}</td>
+                          <td style={{ padding: '8px', color: 'var(--text-muted)' }}>{item.targetUsername || '-'}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{item.postsInFollowingsCollection}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{item.postsInPostsCollection}</td>
+                          <td style={{ padding: '8px', fontSize: '12px', color: 'var(--warning)' }}>{item.reason}</td>
+                          <td style={{ padding: '8px', textAlign: 'center' }}>
+                            <button
+                              className="btn btn-secondary"
+                              onClick={async () => {
+                                if (!confirm(`Fetch posts for "${item.username}"?`)) {
+                                  return
+                                }
+                                setFetchingPosts(true)
+                                try {
+                                  const result = await fetchPosts([item.username], postFetchTargetUsername || null)
+                                  setFetchId(result.fetchId)
+                                  alert(`Post fetch initiated for "${item.username}"! Fetch ID: ${result.fetchId}\n\nCheck status below.`)
+                                  // Start polling
+                                  const pollInterval = setInterval(async () => {
+                                    try {
+                                      const status = await getFetchStatus(result.fetchId)
+                                      setFetchStatus(status)
+                                      if (status.status === 'completed' || status.status === 'cancelled') {
+                                        clearInterval(pollInterval)
+                                        setFetchingPosts(false)
+                                        const data = await getUsernamesWithoutPosts()
+                                        setUsernamesWithoutPosts(data || [])
+                                      }
+                                    } catch (error) {
+                                      console.error('Failed to get fetch status:', error)
+                                    }
+                                  }, 2000)
+                                  setTimeout(() => clearInterval(pollInterval), 600000)
+                                } catch (error) {
+                                  console.error('Failed to fetch posts:', error)
+                                  alert('Failed to fetch posts: ' + (error.response?.data?.error || error.message))
+                                  setFetchingPosts(false)
+                                }
+                              }}
+                              disabled={fetchingPosts}
+                              style={{ 
+                                fontSize: '11px', 
+                                padding: '4px 8px',
+                                backgroundColor: 'var(--primary)',
+                                color: '#fff',
+                                fontWeight: 'bold',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: fetchingPosts ? 'not-allowed' : 'pointer'
+                              }}
+                            >
+                              📥 Fetch
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+
+          {fetchId && fetchStatus && (
+            <div className="card" style={{ marginTop: '24px' }}>
+              <h3 style={{ fontSize: '16px', marginBottom: '12px' }}>Fetch Status: {fetchStatus.status}</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+                <div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Total</div>
+                  <div style={{ fontSize: '20px', fontWeight: 'bold' }}>{fetchStatus.total}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Processed</div>
+                  <div style={{ fontSize: '20px', fontWeight: 'bold' }}>{fetchStatus.processed}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Success</div>
+                  <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--success)' }}>{fetchStatus.success}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Failed</div>
+                  <div style={{ fontSize: '20px', fontWeight: 'bold', color: fetchStatus.failed > 0 ? 'var(--danger)' : 'inherit' }}>{fetchStatus.failed}</div>
+                </div>
+              </div>
+              {fetchStatus.results && fetchStatus.results.length > 0 && (
+                <div style={{ marginTop: '16px' }}>
+                  <h4 style={{ fontSize: '14px', marginBottom: '8px' }}>Results:</h4>
+                  <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                          <th style={{ padding: '4px', textAlign: 'left' }}>Username</th>
+                          <th style={{ padding: '4px', textAlign: 'center' }}>Status</th>
+                          <th style={{ padding: '4px', textAlign: 'right' }}>Posts Found</th>
+                          <th style={{ padding: '4px', textAlign: 'left' }}>Error</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fetchStatus.results.map((result, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                            <td style={{ padding: '4px' }}>{result.username}</td>
+                            <td style={{ padding: '4px', textAlign: 'center' }}>
+                              {result.success ? (
+                                <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>✓ Success</span>
+                              ) : (
+                                <span style={{ color: 'var(--danger)', fontWeight: 'bold' }}>✗ Failed</span>
+                              )}
+                            </td>
+                            <td style={{ padding: '4px', textAlign: 'right' }}>{result.postsFound ?? '-'}</td>
+                            <td style={{ padding: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                              {result.errorMessage ? (result.errorMessage.length > 50 ? result.errorMessage.substring(0, 50) + '...' : result.errorMessage) : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

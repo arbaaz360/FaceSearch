@@ -8,7 +8,29 @@ $collections = @(
     "album_dominants"
 )
 
-$bodyJson = '{"vectors":{"size":512,"distance":"Cosine","on_disk":true},"hnsw_config":{"m":16,"ef_construct":256},"optimizers_config":{"default_segment_number":2}}'
+$payloadSchema = @{
+    albumId = @{ type = "keyword" }
+    account = @{ type = "keyword" }
+    tags    = @{ type = "keyword"; multi = $true }
+}
+
+$bodyObj = @{
+    vectors = @{
+        size     = 512
+        distance = "Cosine"
+        on_disk  = $true
+    }
+    hnsw_config = @{
+        m            = 16
+        ef_construct = 256
+    }
+    optimizers_config = @{
+        default_segment_number = 2
+    }
+    payload_schema = $payloadSchema
+}
+
+$bodyJson = $bodyObj | ConvertTo-Json -Depth 6
 
 foreach ($collectionName in $collections) {
     $url = "$baseUrl/collections/$collectionName"

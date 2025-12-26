@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JPG6 Image Downloader - Manual Input</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 28px;
+        }
+        
+        .status {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+        }
+        
+        .status-label {
+            font-weight: 600;
+            color: #666;
+            margin-bottom: 10px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .current-url {
+            color: #333;
+            font-size: 16px;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .waiting {
+            background: #fff3cd;
+            border-left-color: #ffc107;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+            font-family: 'Courier New', monospace;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .help-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+            font-style: italic;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+        
+        button {
+            flex: 1;
+            padding: 14px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-submit {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-submit:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-skip {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-skip:hover {
+            background: #5a6268;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(108, 117, 125, 0.4);
+        }
+        
+        .history {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .history-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .history-item {
+            background: #f8f9fa;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .error {
+            color: #dc3545;
+            background: #f8d7da;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖼️ JPG6 Image Downloader</h1>
+        
+        <div class="status" id="status">
+            <div class="status-label">Current URL Being Processed</div>
+            <div class="current-url" id="currentUrl">Waiting for URL...</div>
+        </div>
+        
+        <div id="inputForm" style="display: none;">
+            <div class="form-group">
+                <label for="originalUrl">Original URL:</label>
+                <input type="text" id="originalUrl" readonly>
+            </div>
+            
+            <div class="form-group">
+                <label for="redirectedUrl">Redirected URL (if different):</label>
+                <input type="text" id="redirectedUrl" placeholder="Leave empty if same as original">
+            </div>
+            
+            <div class="form-group">
+                <label for="finalImageUrl">Final Image URL to Download:</label>
+                <input type="text" id="finalImageUrl" placeholder="Enter the actual image URL (e.g., https://simp2.selti-delivery.ru/...)">
+                <div class="help-text">This is the URL that should have been found and downloaded</div>
+            </div>
+            
+            <div class="error" id="error"></div>
+            
+            <div class="button-group">
+                <button class="btn-submit" onclick="submitUrl()">Submit & Continue</button>
+                <button class="btn-skip" onclick="skipUrl()">Skip (No File)</button>
+            </div>
+        </div>
+        
+        <div class="history">
+            <div class="history-title">Recent Submissions</div>
+            <div id="historyList"></div>
+        </div>
+    </div>
+    
+    <script>
+        let currentRequestId = null;
+        let isSubmitting = false;
+        let formSubmittedRequestId = null;
+        
+        // Poll for new URLs
+        async function pollForUrl() {
+            // Don't poll while user is submitting
+            if (isSubmitting) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                // If we just submitted and the request ID changed, the backend processed it
+                if (formSubmittedRequestId && data.requestId !== formSubmittedRequestId) {
+                    formSubmittedRequestId = null;
+                    // Form will be hidden below if not waiting
+                }
+                
+                if (data.waiting && data.currentUrl) {
+                    // Only update if it's a new request
+                    if (data.requestId !== currentRequestId) {
+                        document.getElementById('currentUrl').textContent = data.currentUrl;
+                        document.getElementById('status').classList.add('waiting');
+                        document.getElementById('inputForm').style.display = 'block';
+                        document.getElementById('originalUrl').value = data.currentUrl;
+                        document.getElementById('redirectedUrl').value = data.redirectedUrl || '';
+                        document.getElementById('finalImageUrl').value = '';
+                        document.getElementById('error').style.display = 'none';
+                        currentRequestId = data.requestId;
+                    }
+                } else {
+                    // Only hide form if we're sure it's not waiting AND we haven't just submitted
+                    if (!data.waiting && formSubmittedRequestId === null) {
+                        document.getElementById('currentUrl').textContent = data.currentUrl || 'Processing...';
+                        document.getElementById('status').classList.remove('waiting');
+                        document.getElementById('inputForm').style.display = 'none';
+                    }
+                }
+            } catch (error) {
+                console.error('Error polling:', error);
+            }
+        }
+        
+        async function submitUrl() {
+            const originalUrl = document.getElementById('originalUrl').value;
+            const redirectedUrl = document.getElementById('redirectedUrl').value;
+            const finalImageUrl = document.getElementById('finalImageUrl').value;
+            
+            if (!finalImageUrl.trim()) {
+                document.getElementById('error').textContent = 'Please enter the final image URL or click Skip';
+                document.getElementById('error').style.display = 'block';
+                return;
+            }
+            
+            isSubmitting = true;
+            formSubmittedRequestId = currentRequestId;
+            
+            try {
+                const response = await fetch('/api/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        requestId: currentRequestId,
+                        originalUrl: originalUrl,
+                        redirectedUrl: redirectedUrl || originalUrl,
+                        finalImageUrl: finalImageUrl
+                    })
+                });
+                
+                if (response.ok) {
+                    addToHistory(originalUrl, redirectedUrl || originalUrl, finalImageUrl);
+                    // Don't hide form immediately - let polling handle it
+                    // Wait a bit to ensure backend processed it
+                    setTimeout(() => {
+                        isSubmitting = false;
+                        // Form will be hidden by polling if backend is no longer waiting
+                    }, 1000);
+                } else {
+                    isSubmitting = false;
+                    document.getElementById('error').textContent = 'Error submitting. Please try again.';
+                    document.getElementById('error').style.display = 'block';
+                }
+            } catch (error) {
+                isSubmitting = false;
+                formSubmittedRequestId = null;
+                document.getElementById('error').textContent = 'Error submitting: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+            }
+        }
+        
+        async function skipUrl() {
+            const originalUrl = document.getElementById('originalUrl').value;
+            const redirectedUrl = document.getElementById('redirectedUrl').value;
+            
+            isSubmitting = true;
+            formSubmittedRequestId = currentRequestId;
+            
+            try {
+                const response = await fetch('/api/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        requestId: currentRequestId,
+                        originalUrl: originalUrl,
+                        redirectedUrl: redirectedUrl || originalUrl,
+                        finalImageUrl: 'SKIP'
+                    })
+                });
+                
+                if (response.ok) {
+                    addToHistory(originalUrl, redirectedUrl || originalUrl, 'SKIP');
+                    // Don't hide form immediately - let polling handle it
+                    setTimeout(() => {
+                        isSubmitting = false;
+                    }, 1000);
+                } else {
+                    isSubmitting = false;
+                    document.getElementById('error').textContent = 'Error skipping. Please try again.';
+                    document.getElementById('error').style.display = 'block';
+                }
+            } catch (error) {
+                isSubmitting = false;
+                formSubmittedRequestId = null;
+                document.getElementById('error').textContent = 'Error skipping: ' + error.message;
+                document.getElementById('error').style.display = 'block';
+            }
+        }
+        
+        function addToHistory(original, redirected, final) {
+            const historyList = document.getElementById('historyList');
+            const item = document.createElement('div');
+            item.className = 'history-item';
+            item.innerHTML = `
+                <strong>Original:</strong> ${original}<br>
+                <strong>Redirected:</strong> ${redirected}<br>
+                <strong>Final:</strong> ${final === 'SKIP' ? '<em>Skipped</em>' : final}
+            `;
+            historyList.insertBefore(item, historyList.firstChild);
+            
+            // Keep only last 10 items
+            while (historyList.children.length > 10) {
+                historyList.removeChild(historyList.lastChild);
+            }
+        }
+        
+        // Poll every 1 second (less aggressive)
+        setInterval(pollForUrl, 1000);
+        pollForUrl();
+    </script>
+</body>
+</html>
+

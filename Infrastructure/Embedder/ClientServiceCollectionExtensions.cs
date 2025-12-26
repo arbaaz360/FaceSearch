@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace FaceSearch.Infrastructure.Embedder
@@ -14,11 +15,28 @@ namespace FaceSearch.Infrastructure.Embedder
                 services.Configure(configure);
             services.AddSingleton(sp => sp.GetRequiredService<IOptions<EmbedderOptions>>().Value);
 
-            // Register IHttpClientFactory so EmbedderClient can create its own HttpClient
+            // Register IHttpClientFactory so clients can create HttpClients
             services.AddHttpClient();
 
-            // Register EmbedderClient as a normal service, not a typed one
-            services.AddSingleton<IEmbedderClient, EmbedderClient>();
+            // Check if multiple URLs are configured - use load-balanced client if so
+            services.AddSingleton<IEmbedderClient>(sp =>
+            {
+                var opt = sp.GetRequiredService<IOptions<EmbedderOptions>>().Value;
+                var log = sp.GetRequiredService<ILogger<LoadBalancedEmbedderClient>>();
+                var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+
+                // Use load-balanced client if multiple URLs are configured
+                if (opt.BaseUrls != null && opt.BaseUrls.Length > 1)
+                {
+                    return new LoadBalancedEmbedderClient(httpFactory, sp.GetRequiredService<IOptions<EmbedderOptions>>(), log);
+                }
+                else
+                {
+                    // Fallback to single-instance client for backward compatibility
+                    var http = httpFactory.CreateClient();
+                    return new EmbedderClient(http, opt, sp.GetRequiredService<ILogger<EmbedderClient>>());
+                }
+            });
 
             return services;
         }

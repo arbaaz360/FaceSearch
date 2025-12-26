@@ -1320,6 +1320,11 @@ curl -X POST http://localhost:5240/_diagnostics/embedder/reviews/merge-albums \
 
 ## 📊 Performance Tuning
 
+### Qdrant Payload Indexes (critical for filter speed)
+
+- Run `powershell -NoProfile -File scripts/ensure-qdrant-indexes.ps1` after first boot or any time you recreate collections. This creates payload indexes on `albumId`, `account`, and `tags` for all collections so filtered searches avoid full scans and 60s timeouts.
+- `create-qdrant-collections.ps1` now includes the same payload schema when creating collections from scratch.
+
 ### Worker Performance
 
 Adjust in `Workers.Indexer/appsettings.json`:

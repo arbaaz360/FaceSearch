@@ -10,6 +10,7 @@ public sealed class QSearchRequest
     [JsonPropertyName("with_payload")] public bool WithPayload { get; set; } = true;
     [JsonPropertyName("with_vector")] public bool WithVector { get; set; } = false;
     [JsonPropertyName("filter")] public QFilter? Filter { get; set; }
+    [JsonPropertyName("score_threshold")] public double? ScoreThreshold { get; set; }
 }
 
 public sealed class QFilter

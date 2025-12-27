@@ -11,6 +11,7 @@ public sealed class QSearchRequest
     [JsonPropertyName("with_vector")] public bool WithVector { get; set; } = false;
     [JsonPropertyName("filter")] public QFilter? Filter { get; set; }
     [JsonPropertyName("score_threshold")] public double? ScoreThreshold { get; set; }
+    [JsonPropertyName("search_params")] public QSearchParams? SearchParams { get; set; }
 }
 
 public sealed class QFilter
@@ -43,4 +44,9 @@ public sealed class QScoredPoint
 
     // payload is an arbitrary dictionary
     [JsonPropertyName("payload")] public Dictionary<string, object?>? Payload { get; set; }
+}
+
+public sealed class QSearchParams
+{
+    [JsonPropertyName("hnsw_ef")] public int? HnswEf { get; set; }
 }

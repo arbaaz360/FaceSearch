@@ -143,7 +143,8 @@ public sealed class QdrantClient : IQdrantClient
             limit,
             with_payload = true,
             with_vectors = false,
-            filter
+            filter,
+            search_params = new { hnsw_ef = 64 }
             // optional: score_threshold = 0.56
         };
 
@@ -220,7 +221,8 @@ public sealed class QdrantClient : IQdrantClient
             Limit = limit,
             WithPayload = true,
             WithVector = false,
-            ScoreThreshold = 0.40 // Skip very low similarity matches to speed up search
+            ScoreThreshold = 0.40, // Skip very low similarity matches to speed up search
+            SearchParams = new QSearchParams { HnswEf = 64 }
         };
 
         if (!string.IsNullOrWhiteSpace(albumIdFilter))

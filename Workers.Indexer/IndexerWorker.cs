@@ -407,7 +407,7 @@ namespace FaceSearch.Workers.Indexer
         private const double T_LOW = 0.56;   // fuzzy band – allow merge if consensus
         private const int MIN_NEIGHBORS = 2;      // need >=2 neighbors from same cluster
         private const double BEST_MARGIN = 0.05;   // best should beat runner-up by this
-        private const int TOPK = 15;     // Reduced from 30 to speed up searches (fewer results to process)
+        private const int TOPK = 8;     // Reduced further to shrink per-face search work
         private const double MIN_SCORE_THRESHOLD = 0.40; // Skip searches if we expect no good matches
 
         private async Task<string> ResolveAlbumClusterIdAsync(

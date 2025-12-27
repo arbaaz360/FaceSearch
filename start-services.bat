@@ -63,9 +63,16 @@ if not exist "%SCRIPT_DIR%frontend\node_modules" (
     cd /d "%SCRIPT_DIR%"
     echo [OK] Frontend dependencies installed
 )
-start "FaceSearch-Frontend" /D "%SCRIPT_DIR%frontend" cmd /k "title FaceSearch-Frontend && npm run dev"
+start "FaceSearch-Frontend" /D "%SCRIPT_DIR%frontend" cmd /k "title FaceSearch-Frontend && npm run dev -- --host --port 3000"
 timeout /t 2 /nobreak >nul
-echo [OK] Frontend starting (check Frontend window)
+echo [CHECK] Waiting for frontend (http://localhost:3000)...
+powershell -NoProfile -Command ^
+    "$u='http://localhost:3000'; $deadline=(Get-Date).AddSeconds(60); while((Get-Date) -lt $deadline){ try { Invoke-RestMethod -Uri $u -TimeoutSec 5 | Out-Null; Write-Host '[OK] Frontend responding on :3000'; exit 0 } catch { Start-Sleep -Seconds 3 } }; Write-Warning 'Frontend did not respond on port 3000 within 60s'; exit 1"
+if errorlevel 1 (
+    echo [WARN] Frontend health check failed. Check the Frontend window for errors.
+) else (
+    echo [OK] Frontend responded.
+)
 :skip_frontend
 echo.
 

@@ -15,7 +15,7 @@ REM Base port (first instance will use this, subsequent ones increment)
 set BASE_PORT=8090
 
 REM GPU device selection: cuda | dml | cpu
-set CLIP_DEVICE=dml
+set CLIP_DEVICE=cuda
 
 echo ========================================
 echo   Starting %INSTANCE_COUNT% Embedder Instances

@@ -33,7 +33,7 @@ for /L %%i in (1,1,%INSTANCE_COUNT%) do (
     set INSTANCE_NUM=%%i
     
     echo [*] Starting embedder instance %%i on port !PORT!...
-    start "FaceSearch-Embedder-!INSTANCE_NUM!" /D "%SCRIPT_DIR%embedder" cmd /k "title FaceSearch-Embedder-!INSTANCE_NUM! && set PORT=!PORT! && set INSTANCE_NUM=!INSTANCE_NUM! && set CLIP_DEVICE=%CLIP_DEVICE% && call start-instance.bat"
+    start "FaceSearch-Embedder-!INSTANCE_NUM!" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1" -Port !PORT! -ClipDevice %CLIP_DEVICE%
     timeout /t 2 /nobreak >nul
 )
 

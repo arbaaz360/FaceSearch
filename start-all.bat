@@ -25,7 +25,7 @@ echo.
 
 REM -------- Step 2: Start Python Embedder --------
 echo [2/5] Starting Python Embedder service...
-start "FaceSearch-Embedder" /D "%SCRIPT_DIR%embedder" cmd /k "title FaceSearch-Embedder && call start.bat"
+start "FaceSearch-Embedder" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1"
 timeout /t 3 /nobreak >nul
 echo [CHECK] Waiting for embedder health (http://localhost:8090/_status)...
 powershell -NoProfile -Command ^

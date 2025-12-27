@@ -11,9 +11,9 @@ set PORT=8090
 REM Choose CLIP backend: dml | cuda | cpu
 set CLIP_DEVICE=dml
 set NUMPY_PIN=numpy==2.2.6
-set CONSTRAINTS_FILE=%SCRIPT_DIR%pip-constraints.txt
-set MARKER_FILE=%SCRIPT_DIR%.venv\.deps_ready
-set FORCE_REINSTALL=%FORCE_REINSTALL%
+set "CONSTRAINTS_FILE=%SCRIPT_DIR%pip-constraints.txt"
+set "MARKER_FILE=%SCRIPT_DIR%.venv\.deps_ready"
+set "FORCE_REINSTALL=%FORCE_REINSTALL%"
 
 REM -------- Python venv --------
 if not exist ".venv" (
@@ -27,7 +27,7 @@ if not exist "%CONSTRAINTS_FILE%" (
 )
 
 REM -------- Optional fast path --------
-if "%FORCE_REINSTALL%"=="" (
+if not defined FORCE_REINSTALL (
     if exist "%MARKER_FILE%" (
         echo [*] Using existing venv (set FORCE_REINSTALL=1 to rebuild)...
         goto :verify

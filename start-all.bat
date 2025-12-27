@@ -24,8 +24,10 @@ timeout /t 3 /nobreak >nul
 echo.
 
 REM -------- Step 2: Start Python Embedder --------
-echo [2/5] Starting Python Embedder service...
-start "FaceSearch-Embedder" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1"
+echo [2/5] Starting Python Embedder service (3 instances)...
+start "FaceSearch-Embedder-1" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1" -Port 8090 -ClipDevice dml
+start "FaceSearch-Embedder-2" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1" -Port 8091 -ClipDevice dml
+start "FaceSearch-Embedder-3" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1" -Port 8092 -ClipDevice dml
 timeout /t 3 /nobreak >nul
 echo [CHECK] Waiting for embedder health (http://localhost:8090/_status)...
 powershell -NoProfile -Command ^
@@ -106,4 +108,3 @@ echo   1. Close all service windows (Ctrl+C in each)
 echo   2. Run: docker-compose down
 echo.
 pause
-

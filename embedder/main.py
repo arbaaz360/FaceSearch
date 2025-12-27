@@ -225,6 +225,9 @@ async def embed_face(file: UploadFile = File(...)):
     data = await file.read()
     arr = np.frombuffer(data, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # BGR
+    if img is None:
+        raise HTTPException(status_code=400, detail="invalid image data")
+
     faces = face_app.get(img)
     if not faces:
         return {"vector": []}
@@ -256,6 +259,9 @@ async def embed_face_multi(file: UploadFile = File(...), female_only: bool = Tru
     data = await file.read()
     arr = np.frombuffer(data, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # BGR
+    if img is None:
+        raise HTTPException(status_code=400, detail="invalid image data")
+
     faces = face_app.get(img)
 
     results = []

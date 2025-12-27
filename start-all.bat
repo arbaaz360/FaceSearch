@@ -29,13 +29,13 @@ start "FaceSearch-Embedder-1" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -E
 start "FaceSearch-Embedder-2" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1" -Port 8091 -ClipDevice dml
 start "FaceSearch-Embedder-3" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1" -Port 8092 -ClipDevice dml
 timeout /t 3 /nobreak >nul
-echo [CHECK] Waiting for embedder health (http://localhost:8090/_status)...
-powershell -NoProfile -Command ^
-    "$u='http://localhost:8090/_status'; $deadline=(Get-Date).AddSeconds(240); while((Get-Date) -lt $deadline){ try { $res=Invoke-RestMethod -Uri $u -TimeoutSec 5; Write-Host \"[OK] Embedder online (clip_device=$($res.clip_device); face_device=$($res.face_device))\"; exit 0 } catch { Start-Sleep -Seconds 3 } }; Write-Warning 'Embedder did not respond on port 8090 within 240s'; exit 1"
-if errorlevel 1 (
-    echo [WARN] Embedder health check failed. See embedder\embedder.log or the embedder window.
-) else (
-    echo [OK] Embedder responded.
+echo [CHECK] Waiting for embedder health (8090-8092)...
+for %%P in (8090 8091 8092) do (
+    powershell -NoProfile -Command ^
+        "$u='http://localhost:%%P/_status'; $deadline=(Get-Date).AddSeconds(240); while((Get-Date) -lt $deadline){ try { $res=Invoke-RestMethod -Uri $u -TimeoutSec 5; Write-Host \"[OK] Embedder on %%P (clip=$($res.clip_device); face=$($res.face_device))\"; exit 0 } catch { Start-Sleep -Seconds 3 } }; Write-Warning 'Embedder did not respond on port %%P within 240s'; exit 1"
+    if errorlevel 1 (
+        echo [WARN] Embedder health check failed on port %%P. See embedder logs.
+    )
 )
 echo.
 

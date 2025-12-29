@@ -1,4 +1,5 @@
-﻿using Infrastructure.Mongo.Models;
+using FaceSearch.Infrastructure.FastIndexing;
+using Infrastructure.Mongo.Models;
 using MongoDB.Driver;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +12,7 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
         private readonly string _imagesCollection;
         private readonly string _reviewsCollection;
         private readonly string _faceReviewsCollection;
+        private readonly string _fastFacesCollection;
 
         public MongoBootstrap(IMongoDatabase db)
         {
@@ -18,6 +20,7 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
             _imagesCollection = "images";
             _reviewsCollection = "reviews";
             _faceReviewsCollection = "face_reviews";
+            _fastFacesCollection = "fast_faces";
         }
 
         public async Task EnsureIndexesAsync(CancellationToken ct = default)
@@ -107,6 +110,16 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
                 new CreateIndexOptions<FaceReviewMongo> { Name = "ix_resolved_created" });
 
             await faceReviews.Indexes.CreateOneAsync(idxResolved, cancellationToken: ct);
+
+            // === FAST FACES (fast search metadata) ===
+            var fastFaces = _db.GetCollection<FastFaceMongo>(_fastFacesCollection);
+            var idxPath = new CreateIndexModel<FastFaceMongo>(
+                Builders<FastFaceMongo>.IndexKeys.Ascending(x => x.Path),
+                new CreateIndexOptions<FastFaceMongo> { Name = "ix_fastfaces_path" });
+            var idxNote = new CreateIndexModel<FastFaceMongo>(
+                Builders<FastFaceMongo>.IndexKeys.Ascending(x => x.Note),
+                new CreateIndexOptions<FastFaceMongo> { Name = "ix_fastfaces_note" });
+            await fastFaces.Indexes.CreateManyAsync(new[] { idxPath, idxNote }, ct);
         }
     }
 }

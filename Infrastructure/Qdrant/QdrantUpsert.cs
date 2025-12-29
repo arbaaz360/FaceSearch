@@ -7,12 +7,17 @@ namespace FaceSearch.Infrastructure.Qdrant
     public sealed class QdrantUpsert : IQdrantUpsert
     {
         private readonly HttpClient _http;
+        private readonly QdrantOptions _opt;
         private readonly ILogger<QdrantUpsert> _log;
 
-        public QdrantUpsert(HttpClient http, ILogger<QdrantUpsert> log)
+        public QdrantUpsert(HttpClient http, QdrantOptions opt, ILogger<QdrantUpsert> log)
         {
             _http = http;
+            _opt = opt;
             _log = log;
+
+            if (_http.BaseAddress == null)
+                _http.BaseAddress = new Uri(_opt.BaseUrl);
         }
 
         public async Task UpsertAsync(

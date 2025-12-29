@@ -1,11 +1,9 @@
-﻿using FaceSearch.Infrastructure.Persistence.Mongo;
+using FaceSearch.Infrastructure.FastIndexing;
 using Infrastructure.Mongo.Models;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
-
 using Microsoft.Extensions.Configuration;
-
 
 namespace FaceSearch.Infrastructure.Persistence.Mongo
 {
@@ -19,6 +17,7 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
         public IMongoCollection<ReviewMongo> Reviews { get; }
         public IMongoCollection<FaceReviewMongo> FaceReviews { get; }
         public IMongoCollection<Jpg6DataMongo> Jpg6Data { get; }
+        public IMongoCollection<FastFaceMongo> FastFaces { get; }
 
         public MongoContext(IConfiguration cfg)
         {
@@ -36,6 +35,7 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
             Reviews = Database.GetCollection<ReviewMongo>("reviews");
             FaceReviews = Database.GetCollection<FaceReviewMongo>("face_reviews");
             Jpg6Data = Database.GetCollection<Jpg6DataMongo>("jpg6_data");
+            FastFaces = Database.GetCollection<FastFaceMongo>("fast_faces");
         }
     }
 }
@@ -59,7 +59,4 @@ public sealed class ImageDocMongo
     // NEW: worker sets true when >=1 face detected in this image
     public bool HasPeople { get; set; } = false;
     public List<string>? Tags { get; set; }   // NEW: multikey array
-
-
-
 }

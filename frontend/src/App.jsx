@@ -6,6 +6,7 @@ import FaceReview from './pages/FaceReview'
 import Reviews from './pages/Reviews'
 import Diagnostics from './pages/Diagnostics'
 import Indexing from './pages/Indexing'
+import FastSearch from './pages/FastSearch'
 import './App.css'
 
 function App() {
@@ -23,6 +24,7 @@ function App() {
               <Link to="/face-review">Face Review</Link>
               <Link to="/reviews">Reviews</Link>
               <Link to="/indexing">Indexing</Link>
+              <Link to="/fast-search">Fast Search</Link>
               <Link to="/diagnostics">Diagnostics</Link>
             </div>
           </div>
@@ -37,6 +39,7 @@ function App() {
             <Route path="/face-review" element={<FaceReview />} />
             <Route path="/reviews" element={<Reviews />} />
             <Route path="/indexing" element={<Indexing />} />
+            <Route path="/fast-search" element={<FastSearch />} />
             <Route path="/diagnostics" element={<Diagnostics />} />
           </Routes>
         </main>

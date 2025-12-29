@@ -13,6 +13,11 @@ export default defineConfig({
       '/_diagnostics': {
         target: 'http://localhost:5240',
         changeOrigin: true
+      },
+      '/fastapi': {
+        target: 'http://localhost:5251',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/fastapi/, '')
       }
     }
   },

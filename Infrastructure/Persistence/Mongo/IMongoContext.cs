@@ -1,11 +1,12 @@
-﻿using MongoDB.Driver;
+using FaceSearch.Infrastructure.FastIndexing;
 using Infrastructure.Mongo.Models;
+using MongoDB.Driver;
 
 namespace FaceSearch.Infrastructure.Persistence.Mongo
 {
     public interface IMongoContext
     {
-        IMongoDatabase Database { get; } // <-- expose Database instead of "Db"
+        IMongoDatabase Database { get; }
 
         IMongoCollection<ImageDocMongo> Images { get; }
         IMongoCollection<AlbumMongo> Albums { get; }
@@ -13,5 +14,6 @@ namespace FaceSearch.Infrastructure.Persistence.Mongo
         IMongoCollection<ReviewMongo> Reviews { get; }
         IMongoCollection<FaceReviewMongo> FaceReviews { get; }
         IMongoCollection<Jpg6DataMongo> Jpg6Data { get; }
+        IMongoCollection<FastFaceMongo> FastFaces { get; }
     }
 }

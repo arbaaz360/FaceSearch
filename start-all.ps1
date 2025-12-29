@@ -1,5 +1,5 @@
 param(
-    [int[]]$EmbedderPorts = @(8090),
+    [int[]]$EmbedderPorts = @(8090, 8091),
     [string]$ClipDevice = "cuda",
     [int]$EmbedderTimeoutSeconds = 240,
     [int]$ApiTimeoutSeconds = 60,

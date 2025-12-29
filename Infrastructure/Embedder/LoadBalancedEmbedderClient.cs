@@ -188,12 +188,12 @@ public sealed class LoadBalancedEmbedderClient : IEmbedderClient
 
     /// <summary>
     /// Tries all embedder instances in order until one succeeds. If all fail, throws the last exception.
-    /// This provides automatic failover if some instances are not available.
+    /// This provides automatic failover; iteration starts at a round-robin offset to spread load.
     /// </summary>
     private async Task<T> TryAllInstancesAsync<T>(Func<HttpClient, CancellationToken, Task<T>> operation, CancellationToken ct)
     {
         Exception? lastException = null;
-        var urlsToTry = _baseUrls.ToArray(); // Copy array to avoid modification during iteration
+        var urlsToTry = GetRoundRobinOrder().ToArray(); // balanced start point
 
         foreach (var baseUrl in urlsToTry)
         {
@@ -236,5 +236,18 @@ public sealed class LoadBalancedEmbedderClient : IEmbedderClient
     {
         public required float[] vector { get; init; }
     }
-}
 
+    private IEnumerable<Uri> GetRoundRobinOrder()
+    {
+        if (_baseUrls.Length == 1)
+            return _baseUrls;
+
+        var start = Interlocked.Increment(ref _roundRobinIndex);
+        var ordered = new Uri[_baseUrls.Length];
+        for (var i = 0; i < _baseUrls.Length; i++)
+        {
+            ordered[i] = _baseUrls[(start + i) % _baseUrls.Length];
+        }
+        return ordered;
+    }
+}

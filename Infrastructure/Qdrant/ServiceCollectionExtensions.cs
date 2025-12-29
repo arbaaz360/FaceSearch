@@ -14,11 +14,13 @@ public static class QdrantServiceCollectionExtensions
         services.AddHttpClient<IQdrantClient, QdrantClient>((sp, http) =>
         {
             http.Timeout = Timeout.InfiniteTimeSpan;
+            http.BaseAddress ??= new Uri(opt.BaseUrl);
         });
 
         services.AddHttpClient<IQdrantUpsert, QdrantUpsert>((sp, http) =>
         {
             http.Timeout = Timeout.InfiniteTimeSpan;
+            http.BaseAddress ??= new Uri(opt.BaseUrl);
         });
 
         return services;

@@ -109,8 +109,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+// Serve SPA static assets and default index file
+app.UseDefaultFiles();
 app.UseStaticFiles();
 if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 app.MapControllers();
+app.MapFallbackToFile("/index.html");
 app.Run();

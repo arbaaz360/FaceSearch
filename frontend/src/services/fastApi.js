@@ -32,4 +32,13 @@ export const fastStatus = async () => {
   return data
 }
 
+export const fastBulkCheck = async (files, threshold) => {
+  const formData = new FormData()
+  files.forEach((f) => formData.append('files', f))
+  const { data } = await fastApi.post('/fast/bulk-check-files', formData, {
+    params: { threshold: threshold ?? 0.6 }
+  })
+  return data
+}
+
 export default fastApi

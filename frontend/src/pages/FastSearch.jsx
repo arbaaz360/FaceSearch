@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { fastSearchFace, fastIndexFolder, fastStatus } from '../services/fastApi'
+import { fastSearchFace, fastIndexFolder, fastStatus, fastBulkCheck } from '../services/fastApi'
 import './FastSearch.css'
 
 function FastSearch() {
@@ -17,6 +17,12 @@ function FastSearch() {
   const [status, setStatus] = useState(null)
   const [statusError, setStatusError] = useState(null)
   const [dragging, setDragging] = useState(false)
+  const [checkFiles, setCheckFiles] = useState([])
+  const [checkThreshold, setCheckThreshold] = useState(0.6)
+  const [checkResult, setCheckResult] = useState(null)
+  const [checkError, setCheckError] = useState(null)
+  const [checkLoading, setCheckLoading] = useState(false)
+  const [checkDragging, setCheckDragging] = useState(false)
 
   const onFileChange = (e) => {
     setFile(e.target.files?.[0] || null)
@@ -74,6 +80,54 @@ function FastSearch() {
     e.preventDefault()
     e.stopPropagation()
     setDragging(false)
+  }
+
+  const onCheckFileSelect = (e) => {
+    const files = Array.from(e.target.files || [])
+    setCheckFiles(files)
+    setCheckResult(null)
+    setCheckError(null)
+  }
+
+  const onCheckDrop = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setCheckDragging(false)
+    const files = Array.from(e.dataTransfer?.files || [])
+    if (files.length === 0) return
+    setCheckFiles(files)
+    setCheckResult(null)
+    setCheckError(null)
+  }
+
+  const onCheckDragOver = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setCheckDragging(true)
+  }
+
+  const onCheckDragLeave = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setCheckDragging(false)
+  }
+
+  const onRunBulkCheck = async () => {
+    if (checkFiles.length === 0) {
+      setCheckError('Select files or a folder to check.')
+      return
+    }
+    setCheckLoading(true)
+    setCheckError(null)
+    setCheckResult(null)
+    try {
+      const data = await fastBulkCheck(checkFiles, Number(checkThreshold) || 0.6)
+      setCheckResult(data)
+    } catch (err) {
+      setCheckError(err?.response?.data ?? err.message ?? 'Bulk check failed')
+    } finally {
+      setCheckLoading(false)
+    }
   }
 
   const onIndex = async () => {
@@ -154,6 +208,54 @@ function FastSearch() {
           </button>
         </div>
         {error && <div className="error">{error}</div>}
+      </div>
+
+      <div className="fast-card">
+        <h3>Check known faces in selected files/folders</h3>
+        <p className="muted">Drop files or select a folder; counts how many have a match at or above the threshold.</p>
+        <div className="fast-form">
+          <label className="file-picker">
+            <span>Select files or folder</span>
+            <input type="file" multiple webkitdirectory="true" onChange={onCheckFileSelect} />
+          </label>
+          <div
+            className={`drop-zone ${checkDragging ? 'dragging' : ''}`}
+            onDragOver={onCheckDragOver}
+            onDragEnter={onCheckDragOver}
+            onDragLeave={onCheckDragLeave}
+            onDrop={onCheckDrop}
+          >
+            Drop files/folder here
+          </div>
+          <label className="topk">
+            Threshold:
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max="1"
+              value={checkThreshold}
+              onChange={(e) => setCheckThreshold(e.target.value)}
+              title="Score threshold for a match"
+            />
+          </label>
+          <button onClick={onRunBulkCheck} disabled={checkLoading}>
+            {checkLoading ? 'Checking...' : 'Check known'}
+          </button>
+        </div>
+        <div className="muted">
+          Selected files: {checkFiles.length}{' '}
+          {checkFiles.length > 0 && `(e.g., ${checkFiles[0].name}${checkFiles.length > 1 ? ', ...' : ''})`}
+        </div>
+        {checkError && <div className="error">{checkError}</div>}
+        {checkResult && (
+          <div className="muted">
+            Processed: {checkResult.processed} · Matched: {checkResult.matched} · Unmatched:{' '}
+            {Math.max(0, (checkResult.processed || 0) - (checkResult.matched || 0))} · Threshold: {checkResult.threshold}{' '}
+            · Time: {checkResult.elapsedMs} ms
+            {checkResult.errors?.length ? ` · Errors: ${checkResult.errors.length}` : ''}
+          </div>
+        )}
       </div>
 
       <div className="fast-card">

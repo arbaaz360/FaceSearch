@@ -10,6 +10,7 @@ using FaceSearch.Infrastructure.Persistence.Mongo;
 using MongoDB.Driver;
 using System.Collections.Generic;
 using System.Linq;
+using System.Diagnostics;
 
 namespace FastSearch.FastApi.Controllers;
 
@@ -97,6 +98,15 @@ public sealed class FastSearchController : ControllerBase
         public string? Note { get; set; }
         public bool OverwriteExisting { get; set; } = false;
         public bool CheckNote { get; set; } = true;
+    }
+
+    public sealed class BulkCheckResponse
+    {
+        public int Processed { get; set; }
+        public int Matched { get; set; }
+        public double Threshold { get; set; }
+        public long ElapsedMs { get; set; }
+        public List<string> Errors { get; set; } = new();
     }
 
     [HttpPost("index-folder")]
@@ -232,6 +242,59 @@ public sealed class FastSearchController : ControllerBase
             collection,
             progress
         });
+    }
+
+    // Bulk check uploaded files (supports selecting a folder in the browser if the input allows directory selection)
+    [HttpPost("bulk-check-files")]
+    public async Task<IActionResult> BulkCheckFiles([FromQuery] double? threshold, CancellationToken ct)
+    {
+        var files = Request.Form?.Files;
+        if (files == null || files.Count == 0)
+            return BadRequest("Upload one or more image files (you can select a folder).");
+
+        var th = threshold.GetValueOrDefault(0.6);
+        var sw = Stopwatch.StartNew();
+        var processed = 0;
+        var matched = 0;
+        var errors = new List<string>();
+
+        foreach (var formFile in files)
+        {
+            if (formFile.Length == 0)
+                continue;
+
+            try
+            {
+                await using var ms = new MemoryStream();
+                await formFile.CopyToAsync(ms, ct);
+                ms.Position = 0;
+
+                var vector = await _embedder.EmbedFaceAsync(ms, formFile.FileName, ct);
+                if (vector.Length == 0)
+                    continue;
+
+                var hits = await _qdrant.SearchHitsAsync(_opt.Collection, vector, 1, null, null, null, ct);
+                if (hits.Count > 0 && hits[0].Score >= th)
+                    matched++;
+
+                processed++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{formFile.FileName}: {ex.Message}");
+            }
+        }
+
+        var resp = new BulkCheckResponse
+        {
+            Processed = processed,
+            Matched = matched,
+            Threshold = th,
+            ElapsedMs = sw.ElapsedMilliseconds,
+            Errors = errors
+        };
+
+        return Ok(resp);
     }
 
     [HttpPost("sync-metadata")]

@@ -26,13 +26,13 @@ if errorlevel 1 (
 echo.
 
 REM Start Fast API
-echo [2/4] Starting FastSearch API (http://localhost:5251)...
-start "FastSearch-API" /D "%SCRIPT_DIR%FastSearch.FastApi" cmd /k "title FastSearch-API && dotnet run --urls http://localhost:5251"
+echo [2/4] Starting FastSearch API (http://localhost:5251) [Release]...
+start "FastSearch-API" /D "%SCRIPT_DIR%FastSearch.FastApi" cmd /k "title FastSearch-API && dotnet run -c Release --urls http://localhost:5251"
 timeout /t 2 /nobreak >nul
 
 REM Start Fast Indexer
-echo [3/4] Starting FastIndexer worker...
-start "FastIndexer-Worker" /D "%SCRIPT_DIR%Workers.FastIndexer" cmd /k "title FastIndexer-Worker && dotnet run"
+echo [3/4] Starting FastIndexer worker [Release]...
+start "FastIndexer-Worker" /D "%SCRIPT_DIR%Workers.FastIndexer" cmd /k "title FastIndexer-Worker && dotnet run -c Release"
 timeout /t 2 /nobreak >nul
 
 REM Frontend for fast search

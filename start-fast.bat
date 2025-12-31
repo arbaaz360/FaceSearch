@@ -11,7 +11,7 @@ echo ========================================
 echo.
 
 set EMBEDDER_PORTS=8090 8091
-echo [1/4] Starting embedders on %EMBEDDER_PORTS% (CUDA)...
+echo [1/5] Starting embedders on %EMBEDDER_PORTS% (CUDA)...
 for %%P in (%EMBEDDER_PORTS%) do (
     start "Fast-Embedder-%%P" /D "%SCRIPT_DIR%embedder" powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%embedder\start.ps1" -Port %%P -ClipDevice cuda
     timeout /t 2 /nobreak >nul
@@ -26,17 +26,30 @@ if errorlevel 1 (
 echo.
 
 REM Start Fast API
-echo [2/4] Starting FastSearch API (http://localhost:5251) [Release]...
-start "FastSearch-API" /D "%SCRIPT_DIR%FastSearch.FastApi" cmd /k "title FastSearch-API && dotnet run -c Release --urls http://localhost:5251"
+echo [2/5] Building FastSearch API + FastIndexer [Release]...
+dotnet build "%SCRIPT_DIR%FastSearch.FastApi\FastSearch.FastApi.csproj" -c Release
+if errorlevel 1 (
+    echo [ERROR] Build failed for FastSearch API.
+    goto :fail
+)
+dotnet build "%SCRIPT_DIR%Workers.FastIndexer\Workers.FastIndexer.csproj" -c Release
+if errorlevel 1 (
+    echo [ERROR] Build failed for FastIndexer.
+    goto :fail
+)
+echo.
+
+echo [3/5] Starting FastSearch API (http://localhost:5251) [Release]...
+start "FastSearch-API" /D "%SCRIPT_DIR%FastSearch.FastApi" cmd /k "title FastSearch-API && dotnet run -c Release --no-build --urls http://localhost:5251"
 timeout /t 2 /nobreak >nul
 
 REM Start Fast Indexer
-echo [3/4] Starting FastIndexer worker [Release]...
-start "FastIndexer-Worker" /D "%SCRIPT_DIR%Workers.FastIndexer" cmd /k "title FastIndexer-Worker && dotnet run -c Release"
+echo [4/5] Starting FastIndexer worker [Release]...
+start "FastIndexer-Worker" /D "%SCRIPT_DIR%Workers.FastIndexer" cmd /k "title FastIndexer-Worker && dotnet run -c Release --no-build"
 timeout /t 2 /nobreak >nul
 
 REM Frontend for fast search
-echo [4/4] Starting Frontend (dev) on %FRONTEND_URL% ...
+echo [5/5] Starting Frontend (dev) on %FRONTEND_URL% ...
 if not exist "%SCRIPT_DIR%frontend\node_modules" (
     echo [INFO] Installing frontend dependencies (first time setup)...
     pushd "%SCRIPT_DIR%frontend"

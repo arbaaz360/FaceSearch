@@ -107,12 +107,14 @@ public sealed class FastSearchController : ControllerBase
         public string? Note { get; set; }
         public int SampleEverySeconds { get; set; } = 10;
         public bool KeyframesOnly { get; set; } = true;
+        public bool FemaleOnly { get; set; } = true;
         public int MaxFacesPerVideo { get; set; } = 50;
         public int MaxFacesPerFrame { get; set; } = 10;
         public int MaxFrameWidth { get; set; } = 0;
         public int MinFaceWidthPx { get; set; } = 40;
         public double MinFaceAreaRatio { get; set; } = 0;
         public double MinBlurVariance { get; set; } = 40;
+        public double MinDetScore { get; set; } = 0.6;
         public double FacePadding { get; set; } = 0.25;
         public double MaxSimilarityToExisting { get; set; } = 0.95;
         public string? OutputDirectory { get; set; }
@@ -210,12 +212,14 @@ public sealed class FastSearchController : ControllerBase
             note,
             SampleEverySeconds: req.SampleEverySeconds,
             KeyframesOnly: req.KeyframesOnly,
+            FemaleOnly: req.FemaleOnly,
             MaxFacesPerVideo: req.MaxFacesPerVideo,
             MaxFacesPerFrame: req.MaxFacesPerFrame,
             MaxFrameWidth: req.MaxFrameWidth,
             MinFaceWidthPx: req.MinFaceWidthPx,
             MinFaceAreaRatio: req.MinFaceAreaRatio,
             MinBlurVariance: req.MinBlurVariance,
+            MinDetScore: req.MinDetScore,
             FacePadding: req.FacePadding,
             MaxSimilarityToExisting: req.MaxSimilarityToExisting,
             OutputDirectory: req.OutputDirectory,

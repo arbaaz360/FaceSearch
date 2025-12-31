@@ -36,12 +36,14 @@ function FastSearch() {
   const [videoIncludeSubdirs, setVideoIncludeSubdirs] = useState(true)
   const [videoSampleEverySeconds, setVideoSampleEverySeconds] = useState(10)
   const [videoKeyframesOnly, setVideoKeyframesOnly] = useState(true)
+  const [videoFemaleOnly, setVideoFemaleOnly] = useState(true)
   const [videoMaxFacesPerVideo, setVideoMaxFacesPerVideo] = useState(50)
   const [videoMaxFacesPerFrame, setVideoMaxFacesPerFrame] = useState(10)
   const [videoMaxFrameWidth, setVideoMaxFrameWidth] = useState(0)
   const [videoMaxSimilarityToExisting, setVideoMaxSimilarityToExisting] = useState(0.95)
   const [videoMinFaceWidthPx, setVideoMinFaceWidthPx] = useState(40)
   const [videoMinBlurVariance, setVideoMinBlurVariance] = useState(40)
+  const [videoMinDetScore, setVideoMinDetScore] = useState(0.6)
   const [videoOutputDirectory, setVideoOutputDirectory] = useState('')
   const [videoMsg, setVideoMsg] = useState('')
 
@@ -235,6 +237,9 @@ function FastSearch() {
     const minBlur = Number(videoMinBlurVariance)
     const safeMinBlur = Number.isFinite(minBlur) ? Math.max(0, minBlur) : 40
 
+    const detScore = Number(videoMinDetScore)
+    const safeDetScore = Number.isFinite(detScore) ? Math.max(0, Math.min(detScore, 1)) : 0.6
+
     try {
       await fastIndexVideos({
         folderPath: videoFolderPath.trim(),
@@ -242,11 +247,13 @@ function FastSearch() {
         note: null,
         sampleEverySeconds: safeSampleEvery,
         keyframesOnly: videoKeyframesOnly,
+        femaleOnly: videoFemaleOnly,
         maxFacesPerVideo: safeMaxFaces,
         maxFacesPerFrame: safeMaxFacesFrame,
         maxFrameWidth: safeFrameWidth,
         minFaceWidthPx: safeMinFacePx,
         minBlurVariance: safeMinBlur,
+        minDetScore: safeDetScore,
         maxSimilarityToExisting: safeMaxSim,
         outputDirectory: videoOutputDirectory.trim() || null,
         saveCrops: true
@@ -531,6 +538,14 @@ function FastSearch() {
             />
             Keyframes only
           </label>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={videoFemaleOnly}
+              onChange={(e) => setVideoFemaleOnly(e.target.checked)}
+            />
+            Female only
+          </label>
           <label className="topk">
             Every (sec):
             <input
@@ -595,6 +610,18 @@ function FastSearch() {
               value={videoMinBlurVariance}
               onChange={(e) => setVideoMinBlurVariance(e.target.value)}
               title="Higher means stricter; filters blurry faces"
+            />
+          </label>
+          <label className="topk">
+            Det score:
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              value={videoMinDetScore}
+              onChange={(e) => setVideoMinDetScore(e.target.value)}
+              title="Filters weak/low-confidence face detections (0 disables)"
             />
           </label>
           <label className="topk">

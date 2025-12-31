@@ -93,6 +93,7 @@ namespace FaceSearch.Infrastructure.Embedder
         [JsonPropertyName("vector")] public float[] Vector { get; set; } = Array.Empty<float>();
         [JsonPropertyName("gender")] public string? Gender { get; set; }
         [JsonPropertyName("gender_score")] public double? GenderScore { get; set; }
+        [JsonPropertyName("det_score")] public double? DetScore { get; set; }
         [JsonPropertyName("bbox")] public int[]? Bbox { get; set; }
     }
 

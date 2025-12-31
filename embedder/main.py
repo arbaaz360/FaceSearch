@@ -233,6 +233,7 @@ async def embed_face(file: UploadFile = File(...)):
         return {"vector": []}
     first = faces[0]
     gender_label, gender_score = "unknown", None
+    det_score = None
     try:
         if hasattr(first, "gender") and first.gender is not None:
             gender_score = float(first.gender)
@@ -240,10 +241,16 @@ async def embed_face(file: UploadFile = File(...)):
             gender_label = "female" if gender_score < 0.5 else "male"
     except Exception:
         pass
+    try:
+        if hasattr(first, "det_score") and first.det_score is not None:
+            det_score = float(first.det_score)
+    except Exception:
+        pass
     return {
         "vector": first.normed_embedding.tolist(),
         "gender": gender_label,
-        "gender_score": gender_score
+        "gender_score": gender_score,
+        "det_score": det_score
     }
 
 
@@ -268,11 +275,17 @@ async def embed_face_multi(file: UploadFile = File(...), female_only: bool = Tru
     for f in faces:
         gender_score = None
         gender_label = "unknown"
+        det_score = None
         try:
             if hasattr(f, "gender") and f.gender is not None:
                 gender_score = float(f.gender)
                 # insightface gender: 0=female, 1=male
                 gender_label = "female" if gender_score < 0.5 else "male"
+        except Exception:
+            pass
+        try:
+            if hasattr(f, "det_score") and f.det_score is not None:
+                det_score = float(f.det_score)
         except Exception:
             pass
 
@@ -291,6 +304,7 @@ async def embed_face_multi(file: UploadFile = File(...), female_only: bool = Tru
             "vector": f.normed_embedding.tolist(),
             "gender": gender_label,
             "gender_score": gender_score,
+            "det_score": det_score,
             "bbox": bbox
         })
 

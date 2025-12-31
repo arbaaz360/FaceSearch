@@ -579,7 +579,7 @@ public sealed class FastIndexerWorker : BackgroundService
                     IReadOnlyList<FaceSearch.Infrastructure.Embedder.FaceDetectionResult> faces;
                     await using (var ms = new MemoryStream(jpegBytes, writable: false))
                     {
-                        faces = await _embedder.DetectFacesAsync(ms, "frame.jpg", femaleOnly: false, ct);
+                        faces = await _embedder.DetectFacesAsync(ms, "frame.jpg", femaleOnly: job.FemaleOnly, ct);
                     }
 
                     if (faces.Count == 0)
@@ -605,9 +605,18 @@ public sealed class FastIndexerWorker : BackgroundService
                         if (face.Vector.Length == 0 || face.Bbox is not { Length: >= 4 })
                             continue;
 
-                        if (!TryGetClampedRect(frameBmp.Width, frameBmp.Height, face.Bbox, job.FacePadding, out var paddedRect, out var rawWidth, out var rawHeight))
+                        var minDetScore = Math.Clamp(job.MinDetScore, 0, 1);
+                        if (minDetScore > 0 && face.DetScore.HasValue && face.DetScore.Value < minDetScore)
                             continue;
 
+                        if (job.FemaleOnly && !IsFemale(face.Gender))
+                            continue;
+
+                        if (!TryGetClampedRects(frameBmp.Width, frameBmp.Height, face.Bbox, job.FacePadding, out var rawRect, out var paddedRect))
+                            continue;
+
+                        var rawWidth = rawRect.Width;
+                        var rawHeight = rawRect.Height;
                         if (rawWidth < Math.Clamp(job.MinFaceWidthPx, 20, 10000) || rawHeight < Math.Clamp(job.MinFaceWidthPx, 20, 10000))
                             continue;
 
@@ -617,10 +626,13 @@ public sealed class FastIndexerWorker : BackgroundService
                         if (minAreaRatio > 0 && faceAreaRatio < minAreaRatio)
                             continue;
 
-                        using var faceBmp = frameBmp.Clone(paddedRect, PixelFormat.Format24bppRgb);
-                        var blur = ComputeLaplacianVariance(faceBmp);
+                        // Compute sharpness on the raw (un-padded) face area to avoid sharp background edges skewing the metric.
+                        using var blurBmp = frameBmp.Clone(rawRect, PixelFormat.Format24bppRgb);
+                        var blur = ComputeLaplacianVariance(blurBmp);
                         if (blur < Math.Max(0, job.MinBlurVariance))
                             continue;
+
+                        using var faceBmp = frameBmp.Clone(paddedRect, PixelFormat.Format24bppRgb);
 
                         var normalized = enableDedup ? TryNormalizeVector(face.Vector) : null;
                         if (enableDedup)
@@ -657,7 +669,7 @@ public sealed class FastIndexerWorker : BackgroundService
                             try
                             {
                                 Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-                                SaveJpeg(faceBmp, outputPath, quality: 85L);
+                                SaveJpeg(faceBmp, outputPath, quality: 92L);
                             }
                             catch (Exception ex)
                             {
@@ -973,11 +985,10 @@ public sealed class FastIndexerWorker : BackgroundService
         return string.IsNullOrWhiteSpace(cleaned) ? "_" : cleaned.Trim();
     }
 
-    private static bool TryGetClampedRect(int imgW, int imgH, int[] bbox, double padding, out Rectangle padded, out int rawW, out int rawH)
+    private static bool TryGetClampedRects(int imgW, int imgH, int[] bbox, double padding, out Rectangle raw, out Rectangle padded)
     {
+        raw = Rectangle.Empty;
         padded = Rectangle.Empty;
-        rawW = 0;
-        rawH = 0;
 
         if (bbox.Length < 4)
             return false;
@@ -986,22 +997,28 @@ public sealed class FastIndexerWorker : BackgroundService
         var y1 = bbox[1];
         var x2 = bbox[2];
         var y2 = bbox[3];
-        var w = Math.Max(0, x2 - x1);
-        var h = Math.Max(0, y2 - y1);
-        if (w <= 0 || h <= 0)
+        if (x2 <= x1 || y2 <= y1)
             return false;
 
-        rawW = w;
-        rawH = h;
+        var rawLeft = Math.Clamp(x1, 0, imgW - 1);
+        var rawTop = Math.Clamp(y1, 0, imgH - 1);
+        var rawRight = Math.Clamp(x2, 0, imgW);
+        var rawBottom = Math.Clamp(y2, 0, imgH);
+        if (rawRight <= rawLeft || rawBottom <= rawTop)
+            return false;
 
+        raw = Rectangle.FromLTRB(rawLeft, rawTop, rawRight, rawBottom);
+
+        var w = raw.Width;
+        var h = raw.Height;
         var pad = Math.Clamp(padding, 0, 1);
         var padX = (int)Math.Round(w * pad);
         var padY = (int)Math.Round(h * pad);
 
-        var left = Math.Max(0, x1 - padX);
-        var top = Math.Max(0, y1 - padY);
-        var right = Math.Min(imgW, x2 + padX);
-        var bottom = Math.Min(imgH, y2 + padY);
+        var left = Math.Max(0, raw.Left - padX);
+        var top = Math.Max(0, raw.Top - padY);
+        var right = Math.Min(imgW, raw.Right + padX);
+        var bottom = Math.Min(imgH, raw.Bottom + padY);
 
         if (right <= left || bottom <= top)
             return false;
@@ -1009,6 +1026,9 @@ public sealed class FastIndexerWorker : BackgroundService
         padded = Rectangle.FromLTRB(left, top, right, bottom);
         return true;
     }
+
+    private static bool IsFemale(string? gender) =>
+        string.Equals(gender, "female", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatTimestamp(double seconds)
     {

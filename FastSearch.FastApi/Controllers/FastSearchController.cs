@@ -661,6 +661,53 @@ public sealed class FastSearchController : ControllerBase
         return File(stream, contentType);
     }
 
+    public sealed class OpenVideoRequest
+    {
+        public string VideoPath { get; set; } = string.Empty;
+    }
+
+    [HttpPost("open-video")]
+    public IActionResult OpenVideo([FromBody] OpenVideoRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.VideoPath))
+            return BadRequest("videoPath is required");
+
+        var path = req.VideoPath.Trim();
+        try
+        {
+            path = Path.GetFullPath(path);
+        }
+        catch
+        {
+            // keep original if normalization fails
+        }
+
+        if (!System.IO.File.Exists(path))
+            return NotFound($"File does not exist: {path}");
+
+        var ext = Path.GetExtension(path);
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"
+        };
+        if (!allowed.Contains(ext))
+            return BadRequest("Only video files can be opened.");
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
+            return Ok(new { message = "Opened", path });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = ex.Message });
+        }
+    }
+
     private sealed class QdrantCollectionInfo
     {
         public string? status { get; set; }

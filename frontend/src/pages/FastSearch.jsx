@@ -6,7 +6,8 @@ import {
   fastStatus,
   fastBulkCheck,
   fastUpsertWatchFolder,
-  fastDeleteWatchFolder
+  fastDeleteWatchFolder,
+  fastOpenVideo
 } from '../services/fastApi'
 import './FastSearch.css'
 
@@ -46,6 +47,7 @@ function FastSearch() {
   const [videoMinDetScore, setVideoMinDetScore] = useState(0.6)
   const [videoOutputDirectory, setVideoOutputDirectory] = useState('')
   const [videoMsg, setVideoMsg] = useState('')
+  const [openVideoMsg, setOpenVideoMsg] = useState('')
 
   const formatTime = (totalSeconds) => {
     const s = Math.max(0, Math.floor(Number(totalSeconds) || 0))
@@ -302,6 +304,17 @@ function FastSearch() {
       setVideoMsg('Video indexing job queued.')
     } catch (err) {
       setVideoMsg(err?.response?.data ?? err.message ?? 'Video indexing failed')
+    }
+  }
+
+  const onOpenVideo = async (videoPath) => {
+    if (!videoPath) return
+    setOpenVideoMsg('')
+    try {
+      await fastOpenVideo(videoPath)
+      setOpenVideoMsg('Opened in your default video player.')
+    } catch (err) {
+      setOpenVideoMsg(err?.response?.data ?? err.message ?? 'Failed to open video')
     }
   }
 
@@ -699,6 +712,7 @@ function FastSearch() {
               <div className="video-match-title">Video Face Detect — matching videos</div>
               <div className="muted">{videoMatches.length}</div>
             </div>
+            {openVideoMsg && <div className="muted">{openVideoMsg}</div>}
             <div className="video-match-items">
               {videoMatches.map((v) => (
                 <div className="video-match-item" key={v.videoPath}>
@@ -725,6 +739,11 @@ function FastSearch() {
                     <div className="video-match-path" title={v.videoPath}>
                       {v.videoPath}
                     </div>
+                  </div>
+                  <div className="video-match-actions">
+                    <button className="secondary" onClick={() => onOpenVideo(v.videoPath)}>
+                      Open
+                    </button>
                   </div>
                 </div>
               ))}

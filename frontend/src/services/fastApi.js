@@ -110,4 +110,9 @@ export const fastBulkCheck = async (files, threshold) => {
   return data
 }
 
+export const fastOpenVideo = async (videoPath) => {
+  const { data } = await fastApi.post('/fast/open-video', { videoPath })
+  return data
+}
+
 export default fastApi

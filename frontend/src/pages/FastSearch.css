@@ -344,6 +344,26 @@ button.danger:hover {
   flex: 1;
 }
 
+.video-match-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.video-match-actions button {
+  background: #1b2430;
+  border: 1px solid #2f3d50;
+  color: #e5e9f0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.video-match-actions button:hover {
+  background: #233041;
+}
+
 .video-match-name {
   font-weight: 600;
   margin-bottom: 4px;

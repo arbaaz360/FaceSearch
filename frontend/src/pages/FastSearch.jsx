@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   fastSearchFace,
   fastIndexFolder,
@@ -46,6 +46,47 @@ function FastSearch() {
   const [videoMinDetScore, setVideoMinDetScore] = useState(0.6)
   const [videoOutputDirectory, setVideoOutputDirectory] = useState('')
   const [videoMsg, setVideoMsg] = useState('')
+
+  const formatTime = (totalSeconds) => {
+    const s = Math.max(0, Math.floor(Number(totalSeconds) || 0))
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    const sec = s % 60
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+    return `${m}:${String(sec).padStart(2, '0')}`
+  }
+
+  const videoMatches = useMemo(() => {
+    const map = new Map()
+    results.forEach((r) => {
+      const videoPath = r?.videoPath
+      if (!videoPath) return
+
+      const existing = map.get(videoPath) || {
+        videoPath,
+        videoName: (videoPath || '').split(/[\\/]/).pop() || '(video)',
+        count: 0,
+        bestScore: -Infinity,
+        previewPath: null,
+        times: []
+      }
+
+      existing.count += 1
+      if (typeof r.score === 'number' && r.score > existing.bestScore) {
+        existing.bestScore = r.score
+        existing.previewPath = r.path || null
+      }
+      if (typeof r.videoTimeSeconds === 'number') existing.times.push(r.videoTimeSeconds)
+      map.set(videoPath, existing)
+    })
+
+    return Array.from(map.values())
+      .map((v) => {
+        const unique = Array.from(new Set((v.times || []).map((t) => Math.round(t)))).sort((a, b) => a - b)
+        return { ...v, times: unique }
+      })
+      .sort((a, b) => (b.bestScore ?? -Infinity) - (a.bestScore ?? -Infinity))
+  }, [results])
 
   const onFileChange = (e) => {
     setFile(e.target.files?.[0] || null)
@@ -510,9 +551,9 @@ function FastSearch() {
       </div>
 
       <div className="fast-card">
-        <h3>Index video folder (good faces only)</h3>
+        <h3>Video Face Detect</h3>
         <p className="muted">
-          Samples frames periodically, keeps only faces that are large and sharp enough, saves face crops, and indexes them for fast search.
+          Extracts high-quality female face crops from videos and indexes them so you can search which videos contain a person.
         </p>
         <div className="fast-form">
           <input
@@ -643,7 +684,7 @@ function FastSearch() {
             value={videoOutputDirectory}
             onChange={(e) => setVideoOutputDirectory(e.target.value)}
           />
-          <button onClick={onVideoIndex}>Queue video index</button>
+          <button onClick={onVideoIndex}>Queue video detect</button>
         </div>
         <div className="muted">
           Output: {videoOutputDirectory.trim() || '(default) .fast-video-faces next to .fast-jobs'}
@@ -652,6 +693,44 @@ function FastSearch() {
       </div>
 
       <div className="fast-results">
+        {videoMatches.length > 0 && (
+          <div className="video-match-card">
+            <div className="video-match-header">
+              <div className="video-match-title">Video Face Detect — matching videos</div>
+              <div className="muted">{videoMatches.length}</div>
+            </div>
+            <div className="video-match-items">
+              {videoMatches.map((v) => (
+                <div className="video-match-item" key={v.videoPath}>
+                  {v.previewPath ? (
+                    <img
+                      className="video-match-thumb"
+                      src={`/fastapi/fast/thumbnail?path=${encodeURIComponent(v.previewPath)}`}
+                      alt={v.videoName || v.videoPath}
+                      onError={(e) => {
+                        e.target.style.display = 'none'
+                      }}
+                    />
+                  ) : (
+                    <div className="video-match-thumb-placeholder">No preview</div>
+                  )}
+                  <div className="video-match-main">
+                    <div className="video-match-name" title={v.videoPath}>
+                      {v.videoName}
+                    </div>
+                    <div className="video-match-meta muted">
+                      Best: {Number.isFinite(v.bestScore) ? v.bestScore.toFixed(4) : 'n/a'} | Matches: {v.count}
+                      {v.times?.length ? ` | Times: ${v.times.slice(0, 6).map(formatTime).join(', ')}` : ''}
+                    </div>
+                    <div className="video-match-path" title={v.videoPath}>
+                      {v.videoPath}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {results.length === 0 && !loading && <div className="muted">No results yet.</div>}
         {results.map((r, idx) => (
           <div className="fast-result" key={r.id || idx}>

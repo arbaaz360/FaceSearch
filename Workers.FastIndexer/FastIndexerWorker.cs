@@ -695,6 +695,9 @@ public sealed class FastIndexerWorker : BackgroundService
                                 Gender = face.Gender,
                                 GenderScore = face.GenderScore,
                                 Bbox = face.Bbox,
+                                VideoPath = videoPath,
+                                VideoTimeMs = frame.PtsTimeMs,
+                                VideoTimeSeconds = frame.PtsTimeSeconds,
                                 CreatedAt = DateTime.UtcNow,
                                 UpdatedAt = DateTime.UtcNow
                             });

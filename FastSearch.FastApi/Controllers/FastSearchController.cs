@@ -80,7 +80,10 @@ public sealed class FastSearchController : ControllerBase
                 faceIndex = m?.FaceIndex ?? TryGetInt(h.Payload, "faceIndex") ?? 0,
                 gender = m?.Gender ?? TryGetString(h.Payload, "gender"),
                 genderScore = m?.GenderScore ?? TryGetDouble(h.Payload, "gender_score"),
-                bbox = m?.Bbox ?? TryGetIntArray(h.Payload, "bbox")
+                bbox = m?.Bbox ?? TryGetIntArray(h.Payload, "bbox"),
+                videoPath = m?.VideoPath,
+                videoTimeMs = m?.VideoTimeMs,
+                videoTimeSeconds = m?.VideoTimeSeconds
             };
         }).ToList();
 

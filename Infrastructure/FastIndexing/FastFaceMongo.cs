@@ -28,6 +28,16 @@ public sealed class FastFaceMongo
     [BsonElement("bbox")]
     public int[]? Bbox { get; set; }
 
+    // For faces extracted from videos, these fields point back to the source video + timestamp.
+    [BsonElement("video_path")]
+    public string? VideoPath { get; set; }
+
+    [BsonElement("video_time_ms")]
+    public long? VideoTimeMs { get; set; }
+
+    [BsonElement("video_time_s")]
+    public double? VideoTimeSeconds { get; set; }
+
     [BsonElement("created_at"), BsonDateTimeOptions(Kind = DateTimeKind.Utc)]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

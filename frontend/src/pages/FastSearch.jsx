@@ -38,7 +38,7 @@ function FastSearch() {
   const [videoKeyframesOnly, setVideoKeyframesOnly] = useState(true)
   const [videoMaxFacesPerVideo, setVideoMaxFacesPerVideo] = useState(50)
   const [videoMaxFacesPerFrame, setVideoMaxFacesPerFrame] = useState(10)
-  const [videoMaxFrameWidth, setVideoMaxFrameWidth] = useState(640)
+  const [videoMaxFrameWidth, setVideoMaxFrameWidth] = useState(0)
   const [videoMaxSimilarityToExisting, setVideoMaxSimilarityToExisting] = useState(0.95)
   const [videoMinFaceWidthPx, setVideoMinFaceWidthPx] = useState(40)
   const [videoMinBlurVariance, setVideoMinBlurVariance] = useState(40)
@@ -224,7 +224,7 @@ function FastSearch() {
     const safeMaxFacesFrame = Number.isFinite(maxFacesFrame) ? Math.max(1, Math.min(Math.round(maxFacesFrame), 50)) : 10
 
     const frameWidth = Number(videoMaxFrameWidth)
-    const safeFrameWidth = Number.isFinite(frameWidth) ? Math.max(160, Math.min(Math.round(frameWidth), 4096)) : 640
+    const safeFrameWidth = Number.isFinite(frameWidth) ? (frameWidth > 0 ? Math.max(160, Math.min(Math.round(frameWidth), 4096)) : 0) : 0
 
     const maxSim = Number(videoMaxSimilarityToExisting)
     const safeMaxSim = Number.isFinite(maxSim) ? Math.max(0, Math.min(maxSim, 1)) : 0.95
@@ -565,14 +565,14 @@ function FastSearch() {
             />
           </label>
           <label className="topk">
-            Frame width:
+            Frame width (0=original):
             <input
               type="number"
-              min="160"
+              min="0"
               step="160"
               value={videoMaxFrameWidth}
               onChange={(e) => setVideoMaxFrameWidth(e.target.value)}
-              title="Resize frames to this max width before face detection"
+              title="Resize frames to this max width before face detection (0 disables resizing)"
             />
           </label>
           <label className="topk">

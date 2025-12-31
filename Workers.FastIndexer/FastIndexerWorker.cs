@@ -801,9 +801,11 @@ public sealed class FastIndexerWorker : BackgroundService
     private async IAsyncEnumerable<SampledFrame> ReadSampledFramesAsync(string videoPath, FastVideoIndexJob job, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         var sampleEverySeconds = Math.Clamp(job.SampleEverySeconds, 1, 3600);
-        var maxWidth = Math.Clamp(job.MaxFrameWidth, 160, 4096);
 
-        var vf = $"fps=1/{sampleEverySeconds},scale={maxWidth}:-1:flags=bicubic,showinfo";
+        var configuredWidth = job.MaxFrameWidth;
+        var vf = configuredWidth > 0
+            ? $"fps=1/{sampleEverySeconds},scale={Math.Clamp(configuredWidth, 160, 4096)}:-1:flags=bicubic,showinfo"
+            : $"fps=1/{sampleEverySeconds},showinfo";
         var args = $"-hide_banner -loglevel info -nostats -an -sn -dn {(job.KeyframesOnly ? "-skip_frame nokey " : string.Empty)}-i \"{videoPath}\" -vf \"{vf}\" -f image2pipe -vcodec mjpeg -";
 
         using var proc = new Process

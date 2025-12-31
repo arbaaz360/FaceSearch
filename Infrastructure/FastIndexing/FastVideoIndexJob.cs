@@ -8,7 +8,7 @@ public sealed record FastVideoIndexJob(
     bool KeyframesOnly = true,
     int MaxFacesPerVideo = 50,
     int MaxFacesPerFrame = 10,
-    int MaxFrameWidth = 640,
+    int MaxFrameWidth = 0,
     int MinFaceWidthPx = 40,
     double MinFaceAreaRatio = 0,
     double MinBlurVariance = 40,

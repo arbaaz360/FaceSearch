@@ -109,7 +109,7 @@ public sealed class FastSearchController : ControllerBase
         public bool KeyframesOnly { get; set; } = true;
         public int MaxFacesPerVideo { get; set; } = 50;
         public int MaxFacesPerFrame { get; set; } = 10;
-        public int MaxFrameWidth { get; set; } = 640;
+        public int MaxFrameWidth { get; set; } = 0;
         public int MinFaceWidthPx { get; set; } = 40;
         public double MinFaceAreaRatio { get; set; } = 0;
         public double MinBlurVariance { get; set; } = 40;

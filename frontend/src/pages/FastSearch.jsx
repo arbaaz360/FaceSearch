@@ -1,5 +1,13 @@
 import { useState, useEffect } from 'react'
-import { fastSearchFace, fastIndexFolder, fastStatus, fastBulkCheck } from '../services/fastApi'
+import {
+  fastSearchFace,
+  fastIndexFolder,
+  fastIndexVideos,
+  fastStatus,
+  fastBulkCheck,
+  fastUpsertWatchFolder,
+  fastDeleteWatchFolder
+} from '../services/fastApi'
 import './FastSearch.css'
 
 function FastSearch() {
@@ -23,6 +31,16 @@ function FastSearch() {
   const [checkError, setCheckError] = useState(null)
   const [checkLoading, setCheckLoading] = useState(false)
   const [checkDragging, setCheckDragging] = useState(false)
+  const [watchIntervalSeconds, setWatchIntervalSeconds] = useState(60)
+  const [videoFolderPath, setVideoFolderPath] = useState('')
+  const [videoIncludeSubdirs, setVideoIncludeSubdirs] = useState(true)
+  const [videoSampleEverySeconds, setVideoSampleEverySeconds] = useState(10)
+  const [videoKeyframesOnly, setVideoKeyframesOnly] = useState(true)
+  const [videoMaxFacesPerVideo, setVideoMaxFacesPerVideo] = useState(50)
+  const [videoMinFaceWidthPx, setVideoMinFaceWidthPx] = useState(90)
+  const [videoMinBlurVariance, setVideoMinBlurVariance] = useState(80)
+  const [videoOutputDirectory, setVideoOutputDirectory] = useState('')
+  const [videoMsg, setVideoMsg] = useState('')
 
   const onFileChange = (e) => {
     setFile(e.target.files?.[0] || null)
@@ -150,6 +168,80 @@ function FastSearch() {
     }
   }
 
+  const onMonitorFolder = async () => {
+    setIndexMsg('')
+    if (!folderPath.trim()) {
+      setIndexMsg('Enter a folder path.')
+      return
+    }
+    const interval = Number(watchIntervalSeconds)
+    const safeInterval = Number.isFinite(interval) ? Math.max(10, Math.min(Math.round(interval), 86400)) : 60
+
+    try {
+      await fastUpsertWatchFolder({
+        folderPath: folderPath.trim(),
+        includeSubdirectories: includeSubdirs,
+        note: note.trim() || null,
+        intervalSeconds: safeInterval,
+        overwriteExisting: overwrite,
+        checkNote,
+        enabled: true
+      })
+      setIndexMsg(`Monitoring enabled (every ${safeInterval}s). New files will be indexed automatically.`)
+    } catch (err) {
+      setIndexMsg(err?.response?.data ?? err.message ?? 'Failed to enable monitoring')
+    }
+  }
+
+  const onRemoveWatch = async (id) => {
+    if (!id) return
+    setIndexMsg('')
+    try {
+      await fastDeleteWatchFolder(id)
+      setIndexMsg('Monitoring removed.')
+    } catch (err) {
+      setIndexMsg(err?.response?.data ?? err.message ?? 'Failed to remove monitoring')
+    }
+  }
+
+  const onVideoIndex = async () => {
+    setVideoMsg('')
+    if (!videoFolderPath.trim()) {
+      setVideoMsg('Enter a video folder path.')
+      return
+    }
+
+    const sampleEvery = Number(videoSampleEverySeconds)
+    const safeSampleEvery = Number.isFinite(sampleEvery) ? Math.max(1, Math.min(Math.round(sampleEvery), 3600)) : 10
+
+    const maxFaces = Number(videoMaxFacesPerVideo)
+    const safeMaxFaces = Number.isFinite(maxFaces) ? Math.max(1, Math.min(Math.round(maxFaces), 10000)) : 50
+
+    const minFacePx = Number(videoMinFaceWidthPx)
+    const safeMinFacePx = Number.isFinite(minFacePx) ? Math.max(20, Math.min(Math.round(minFacePx), 2000)) : 90
+
+    const minBlur = Number(videoMinBlurVariance)
+    const safeMinBlur = Number.isFinite(minBlur) ? Math.max(0, minBlur) : 80
+
+    try {
+      await fastIndexVideos({
+        folderPath: videoFolderPath.trim(),
+        includeSubdirectories: videoIncludeSubdirs,
+        note: null,
+        sampleEverySeconds: safeSampleEvery,
+        keyframesOnly: videoKeyframesOnly,
+        maxFacesPerVideo: safeMaxFaces,
+        minFaceWidthPx: safeMinFacePx,
+        minBlurVariance: safeMinBlur,
+        outputDirectory: videoOutputDirectory.trim() || null,
+        saveCrops: true
+      })
+      setVideoMsg('Video indexing job queued.')
+    } catch (err) {
+      setVideoMsg(err?.response?.data ?? err.message ?? 'Video indexing failed')
+    }
+  }
+
   useEffect(() => {
     let mounted = true
     const loadStatus = async () => {
@@ -250,10 +342,10 @@ function FastSearch() {
         {checkError && <div className="error">{checkError}</div>}
         {checkResult && (
           <div className="muted">
-            Processed: {checkResult.processed} · Matched: {checkResult.matched} · Unmatched:{' '}
-            {Math.max(0, (checkResult.processed || 0) - (checkResult.matched || 0))} · Threshold: {checkResult.threshold}{' '}
-            · Time: {checkResult.elapsedMs} ms
-            {checkResult.errors?.length ? ` · Errors: ${checkResult.errors.length}` : ''}
+            Processed: {checkResult.processed} | Matched: {checkResult.matched} | Unmatched:{' '}
+            {Math.max(0, (checkResult.processed || 0) - (checkResult.matched || 0))} | Threshold: {checkResult.threshold}{' '}
+            | Time: {checkResult.elapsedMs} ms
+            {checkResult.errors?.length ? ` | Errors: ${checkResult.errors.length}` : ''}
           </div>
         )}
       </div>
@@ -309,8 +401,51 @@ function FastSearch() {
             onChange={(e) => setNote(e.target.value)}
           />
           <button onClick={onIndex}>Queue index</button>
+          <label className="topk">
+            Monitor every (sec):
+            <input
+              type="number"
+              min="10"
+              step="10"
+              value={watchIntervalSeconds}
+              onChange={(e) => setWatchIntervalSeconds(e.target.value)}
+              title="Periodic scan interval for new files"
+            />
+          </label>
+          <button className="secondary" onClick={onMonitorFolder}>
+            Monitor folder
+          </button>
         </div>
         {indexMsg && <div className="muted">{indexMsg}</div>}
+
+        {status?.watchFolders?.length > 0 && (
+          <div className="watch-list">
+            <div className="watch-title-row">
+              <div className="watch-title-text">Monitored folders</div>
+              <div className="muted">{status.watchFolders.length}</div>
+            </div>
+            <div className="watch-items">
+              {status.watchFolders.map((w) => {
+                const label = (w.note || '').trim() || (w.folderPath || '').split(/[\\/]/).pop() || '(folder)'
+                return (
+                  <div className="watch-item" key={w.id}>
+                    <div className="watch-main" title={w.folderPath || ''}>
+                      <div className="watch-name">{label}</div>
+                      <div className="watch-meta muted">
+                        <span className="watch-path">{w.folderPath}</span>
+                        {typeof w.intervalSeconds === 'number' ? ` | every ${w.intervalSeconds}s` : ''}
+                        {typeof w.includeSubdirectories === 'boolean' ? ` | ${w.includeSubdirectories ? 'subfolders' : 'no subfolders'}` : ''}
+                      </div>
+                    </div>
+                    <button className="danger" onClick={() => onRemoveWatch(w.id)}>
+                      Remove
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {status?.progress?.length > 0 && (
           <div className="progress-list">
@@ -337,8 +472,8 @@ function FastSearch() {
                   </div>
                   <div className="progress-sub muted">
                     {(p.state || 'running').toUpperCase()}
-                    {p.updatedAt ? ` • ${new Date(p.updatedAt).toLocaleTimeString()}` : ''}
-                    {p.note ? ` • ${p.note}` : ''}
+                    {p.updatedAt ? ` | ${new Date(p.updatedAt).toLocaleTimeString()}` : ''}
+                    {p.note ? ` | ${p.note}` : ''}
                   </div>
                   {p.folder && (
                     <div className="progress-folder muted" title={p.folder}>
@@ -350,6 +485,94 @@ function FastSearch() {
             })}
           </div>
         )}
+      </div>
+
+      <div className="fast-card">
+        <h3>Index video folder (good faces only)</h3>
+        <p className="muted">
+          Samples frames periodically, keeps only faces that are large and sharp enough, saves face crops, and indexes them for fast search.
+        </p>
+        <div className="fast-form">
+          <input
+            className="path-input"
+            type="text"
+            placeholder="X:\\path\\to\\videos"
+            value={videoFolderPath}
+            onChange={(e) => setVideoFolderPath(e.target.value)}
+          />
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={videoIncludeSubdirs}
+              onChange={(e) => setVideoIncludeSubdirs(e.target.checked)}
+            />
+            Include subfolders
+          </label>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={videoKeyframesOnly}
+              onChange={(e) => setVideoKeyframesOnly(e.target.checked)}
+            />
+            Keyframes only
+          </label>
+          <label className="topk">
+            Every (sec):
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={videoSampleEverySeconds}
+              onChange={(e) => setVideoSampleEverySeconds(e.target.value)}
+              title="Sampling interval in seconds"
+            />
+          </label>
+          <label className="topk">
+            Max faces/video:
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={videoMaxFacesPerVideo}
+              onChange={(e) => setVideoMaxFacesPerVideo(e.target.value)}
+              title="Stop early after this many good faces per video"
+            />
+          </label>
+          <label className="topk">
+            Min face (px):
+            <input
+              type="number"
+              min="20"
+              step="10"
+              value={videoMinFaceWidthPx}
+              onChange={(e) => setVideoMinFaceWidthPx(e.target.value)}
+              title="Minimum face bounding box width/height in pixels"
+            />
+          </label>
+          <label className="topk">
+            Sharpness:
+            <input
+              type="number"
+              min="0"
+              step="10"
+              value={videoMinBlurVariance}
+              onChange={(e) => setVideoMinBlurVariance(e.target.value)}
+              title="Higher means stricter; filters blurry faces"
+            />
+          </label>
+          <input
+            className="note-input"
+            type="text"
+            placeholder="Output folder (optional)"
+            value={videoOutputDirectory}
+            onChange={(e) => setVideoOutputDirectory(e.target.value)}
+          />
+          <button onClick={onVideoIndex}>Queue video index</button>
+        </div>
+        <div className="muted">
+          Output: {videoOutputDirectory.trim() || '(default) .fast-video-faces next to .fast-jobs'}
+        </div>
+        {videoMsg && <div className="muted">{videoMsg}</div>}
       </div>
 
       <div className="fast-results">

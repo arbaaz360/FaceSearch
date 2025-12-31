@@ -68,6 +68,28 @@
   cursor: pointer;
 }
 
+.fast-form button.secondary {
+  background: #1b2430;
+  border: 1px solid #2f3d50;
+}
+
+.fast-form button.secondary:hover {
+  background: #233041;
+}
+
+button.danger {
+  background: #ff5c5c;
+  color: #fff;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button.danger:hover {
+  background: #ff4a4a;
+}
+
 .fast-results {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -202,4 +224,59 @@
   font-family: monospace;
   font-size: 12px;
   word-break: break-all;
+}
+
+.watch-list {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #1f2b38;
+}
+
+.watch-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.watch-title-text {
+  font-weight: 600;
+  color: #e5e9f0;
+}
+
+.watch-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.watch-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  background: #0f151d;
+  border: 1px solid #1f2b38;
+  border-radius: 8px;
+}
+
+.watch-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.watch-name {
+  font-weight: 600;
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+
+.watch-meta {
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.watch-path {
+  font-family: monospace;
 }

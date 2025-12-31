@@ -100,6 +100,36 @@ public sealed class FastSearchController : ControllerBase
         public bool CheckNote { get; set; } = true;
     }
 
+    public sealed class IndexVideosRequest
+    {
+        public string FolderPath { get; set; } = string.Empty;
+        public bool IncludeSubdirectories { get; set; } = true;
+        public string? Note { get; set; }
+        public int SampleEverySeconds { get; set; } = 10;
+        public bool KeyframesOnly { get; set; } = true;
+        public int MaxFacesPerVideo { get; set; } = 50;
+        public int MaxFacesPerFrame { get; set; } = 3;
+        public int MaxFrameWidth { get; set; } = 640;
+        public int MinFaceWidthPx { get; set; } = 90;
+        public double MinFaceAreaRatio { get; set; } = 0.02;
+        public double MinBlurVariance { get; set; } = 80;
+        public double FacePadding { get; set; } = 0.25;
+        public string? OutputDirectory { get; set; }
+        public bool SaveCrops { get; set; } = true;
+    }
+
+    public sealed class WatchFolderRequest
+    {
+        public string? Id { get; set; }
+        public string FolderPath { get; set; } = string.Empty;
+        public bool IncludeSubdirectories { get; set; } = true;
+        public string? Note { get; set; }
+        public int IntervalSeconds { get; set; } = 60;
+        public bool OverwriteExisting { get; set; } = false;
+        public bool CheckNote { get; set; } = true;
+        public bool Enabled { get; set; } = true;
+    }
+
     public sealed class BulkCheckResponse
     {
         public int Processed { get; set; }
@@ -145,6 +175,180 @@ public sealed class FastSearchController : ControllerBase
         return Accepted(new { message = "Index job queued", folder = req.FolderPath, includeSubdirectories = req.IncludeSubdirectories });
     }
 
+    [HttpPost("index-videos")]
+    public IActionResult IndexVideos([FromBody] IndexVideosRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.FolderPath))
+            return BadRequest("folderPath is required");
+
+        var normalizedFolder = req.FolderPath;
+        try
+        {
+            normalizedFolder = Path.GetFullPath(req.FolderPath);
+        }
+        catch
+        {
+            // keep original if normalization fails
+        }
+
+        if (!Directory.Exists(normalizedFolder))
+            return NotFound($"Folder does not exist: {normalizedFolder}");
+
+        var note = string.IsNullOrWhiteSpace(req.Note)
+            ? Path.GetFileName(normalizedFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            : req.Note.Trim();
+        if (string.IsNullOrWhiteSpace(note))
+            note = null;
+
+        var jobDir = Path.GetFullPath(_optSearch.JobDirectory ?? ".fast-jobs", AppContext.BaseDirectory);
+        Directory.CreateDirectory(jobDir);
+        var jobId = Guid.NewGuid().ToString("N");
+        var job = new FastVideoIndexJob(
+            normalizedFolder,
+            req.IncludeSubdirectories,
+            note,
+            SampleEverySeconds: req.SampleEverySeconds,
+            KeyframesOnly: req.KeyframesOnly,
+            MaxFacesPerVideo: req.MaxFacesPerVideo,
+            MaxFacesPerFrame: req.MaxFacesPerFrame,
+            MaxFrameWidth: req.MaxFrameWidth,
+            MinFaceWidthPx: req.MinFaceWidthPx,
+            MinFaceAreaRatio: req.MinFaceAreaRatio,
+            MinBlurVariance: req.MinBlurVariance,
+            FacePadding: req.FacePadding,
+            OutputDirectory: req.OutputDirectory,
+            SaveCrops: req.SaveCrops);
+        var jobPath = Path.Combine(jobDir, $"job-video-{jobId}.json");
+        var json = JsonSerializer.Serialize(job);
+        System.IO.File.WriteAllText(jobPath, json);
+
+        return Accepted(new { message = "Video index job queued", folder = req.FolderPath, includeSubdirectories = req.IncludeSubdirectories });
+    }
+
+    [HttpGet("watch-folders")]
+    public IActionResult GetWatchFolders()
+    {
+        var jobDir = Path.GetFullPath(_optSearch.JobDirectory ?? ".fast-jobs", AppContext.BaseDirectory);
+        var folders = FastWatchFolderStore.Load(jobDir);
+        var now = DateTimeOffset.UtcNow;
+
+        var resp = folders
+            .OrderBy(x => x.FolderPath, StringComparer.OrdinalIgnoreCase)
+            .Select(x =>
+            {
+                var intervalSeconds = Math.Clamp(x.IntervalSeconds, 10, 24 * 60 * 60);
+                var doneFile = Path.Combine(jobDir, "done", $"job-watch-{x.Id}.done.json");
+                DateTimeOffset? lastRunAt = null;
+                if (System.IO.File.Exists(doneFile))
+                    lastRunAt = new DateTimeOffset(System.IO.File.GetLastWriteTimeUtc(doneFile), TimeSpan.Zero);
+                var nextRunAt = lastRunAt?.AddSeconds(intervalSeconds);
+                var due = nextRunAt == null || nextRunAt <= now;
+
+                return new
+                {
+                    id = x.Id,
+                    folderPath = x.FolderPath,
+                    includeSubdirectories = x.IncludeSubdirectories,
+                    note = x.Note,
+                    intervalSeconds,
+                    overwriteExisting = x.OverwriteExisting,
+                    checkNote = x.CheckNote,
+                    enabled = x.Enabled,
+                    lastRunAt,
+                    nextRunAt,
+                    due
+                };
+            })
+            .ToList();
+
+        return Ok(new { count = resp.Count, folders = resp });
+    }
+
+    [HttpPost("watch-folders")]
+    public IActionResult UpsertWatchFolder([FromBody] WatchFolderRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.FolderPath))
+            return BadRequest("folderPath is required");
+
+        var normalizedFolder = req.FolderPath;
+        try
+        {
+            normalizedFolder = Path.GetFullPath(req.FolderPath);
+        }
+        catch
+        {
+            // keep original if normalization fails
+        }
+
+        if (!Directory.Exists(normalizedFolder))
+            return NotFound($"Folder does not exist: {normalizedFolder}");
+
+        var note = string.IsNullOrWhiteSpace(req.Note)
+            ? Path.GetFileName(normalizedFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            : req.Note.Trim();
+        if (string.IsNullOrWhiteSpace(note))
+            note = null;
+
+        var intervalSeconds = Math.Clamp(req.IntervalSeconds, 10, 24 * 60 * 60);
+
+        var jobDir = Path.GetFullPath(_optSearch.JobDirectory ?? ".fast-jobs", AppContext.BaseDirectory);
+        Directory.CreateDirectory(jobDir);
+        var folders = FastWatchFolderStore.Load(jobDir);
+
+        FastWatchFolder? folder = null;
+        if (!string.IsNullOrWhiteSpace(req.Id))
+            folder = folders.FirstOrDefault(x => string.Equals(x.Id, req.Id, StringComparison.OrdinalIgnoreCase));
+        folder ??= folders.FirstOrDefault(x => string.Equals(x.FolderPath, normalizedFolder, StringComparison.OrdinalIgnoreCase));
+
+        var created = false;
+        if (folder == null)
+        {
+            folder = new FastWatchFolder { Id = Guid.NewGuid().ToString("N") };
+            folders.Add(folder);
+            created = true;
+        }
+
+        folder.FolderPath = normalizedFolder;
+        folder.IncludeSubdirectories = req.IncludeSubdirectories;
+        folder.Note = note;
+        folder.IntervalSeconds = intervalSeconds;
+        folder.OverwriteExisting = req.OverwriteExisting;
+        folder.CheckNote = req.CheckNote;
+        folder.Enabled = req.Enabled;
+
+        FastWatchFolderStore.Save(jobDir, folders);
+
+        return created
+            ? CreatedAtAction(nameof(GetWatchFolders), new { id = folder.Id }, new { message = "Watch folder created", id = folder.Id })
+            : Ok(new { message = "Watch folder updated", id = folder.Id });
+    }
+
+    [HttpDelete("watch-folders/{id}")]
+    public IActionResult DeleteWatchFolder([FromRoute] string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return BadRequest("id is required");
+
+        var jobDir = Path.GetFullPath(_optSearch.JobDirectory ?? ".fast-jobs", AppContext.BaseDirectory);
+        var folders = FastWatchFolderStore.Load(jobDir);
+        var removed = folders.RemoveAll(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
+        if (removed == 0)
+            return NotFound();
+
+        FastWatchFolderStore.Save(jobDir, folders);
+
+        // Best-effort cleanup of any queued watch job file so it doesn't run again.
+        try
+        {
+            var jobFile = Path.Combine(jobDir, $"job-watch-{id}.json");
+            if (System.IO.File.Exists(jobFile))
+                System.IO.File.Delete(jobFile);
+        }
+        catch { /* ignore */ }
+
+        return Ok(new { message = "Watch folder removed", id });
+    }
+
     [HttpGet("status")]
     public async Task<IActionResult> Status(CancellationToken ct)
     {
@@ -160,57 +364,119 @@ public sealed class FastSearchController : ControllerBase
         {
             if (Directory.Exists(progressDir))
             {
+                var candidates = new List<(ProgressDoc doc, DateTimeOffset updatedAt)>();
                 foreach (var file in Directory.GetFiles(progressDir, "*.json"))
                 {
                     try
                     {
                         var json = await System.IO.File.ReadAllTextAsync(file, ct);
                         var doc = JsonSerializer.Deserialize<ProgressDoc>(json);
-                        if (doc != null)
+                        if (doc != null && !string.Equals(doc.state, "failed", StringComparison.OrdinalIgnoreCase))
                         {
-                            progress.Add(new
-                            {
-                                jobId = doc.jobId ?? Path.GetFileNameWithoutExtension(file),
-                                doc.folder,
-                                doc.note,
-                                doc.filesTotal,
-                                doc.filesProcessed,
-                                doc.facesIndexed,
-                                doc.filesSkippedExisting,
-                                doc.filesNoteUpdated,
-                                state = doc.state ?? "running",
-                                doc.updatedAt
-                            });
+                            var updated = doc.updatedAt ?? new DateTimeOffset(System.IO.File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
+                            candidates.Add((doc, updated));
                         }
                     }
                     catch { /* ignore malformed progress files */ }
                 }
+
+                var current = candidates
+                    .OrderByDescending(x => x.updatedAt)
+                    .FirstOrDefault();
+
+                if (current.doc != null)
+                {
+                    progress.Add(new
+                    {
+                        jobId = current.doc.jobId ?? "unknown",
+                        current.doc.folder,
+                        current.doc.note,
+                        current.doc.filesTotal,
+                        current.doc.filesProcessed,
+                        current.doc.facesIndexed,
+                        current.doc.filesSkippedExisting,
+                        current.doc.filesNoteUpdated,
+                        state = current.doc.state ?? "running",
+                        updatedAt = current.updatedAt
+                    });
+                }
             }
+
+            // always include the most recent completed job (even if a job is currently running)
             var doneDirPath = Path.Combine(jobDir, "done");
-            if (progress.Count == 0 && Directory.Exists(doneDirPath))
+            if (Directory.Exists(doneDirPath))
             {
-                foreach (var file in Directory.GetFiles(doneDirPath, "*.done.json").OrderByDescending(System.IO.File.GetLastWriteTimeUtc).Take(5))
+                var file = Directory.GetFiles(doneDirPath, "*.done.json")
+                    .OrderByDescending(System.IO.File.GetLastWriteTimeUtc)
+                    .FirstOrDefault();
+
+                if (file != null)
                 {
                     try
                     {
                         var json = await System.IO.File.ReadAllTextAsync(file, ct);
-                        var doc = JsonSerializer.Deserialize<ProgressDoc>(json);
-                        if (doc != null)
+                        using var doc = JsonDocument.Parse(json);
+                        var root = doc.RootElement;
+
+                        static string? GetString(JsonElement el, params string[] names)
                         {
-                            progress.Add(new
+                            foreach (var n in names)
                             {
-                                jobId = doc.jobId ?? Path.GetFileNameWithoutExtension(file),
-                                doc.folder,
-                                doc.note,
-                                doc.filesTotal,
-                                doc.filesProcessed,
-                                doc.facesIndexed,
-                                doc.filesSkippedExisting,
-                                doc.filesNoteUpdated,
-                                state = "done",
-                                doc.updatedAt
-                            });
+                                if (el.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String)
+                                    return v.GetString();
+                            }
+                            return null;
                         }
+
+                        static int? GetInt(JsonElement el, params string[] names)
+                        {
+                            foreach (var n in names)
+                            {
+                                if (!el.TryGetProperty(n, out var v))
+                                    continue;
+                                if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i))
+                                    return i;
+                            }
+                            return null;
+                        }
+
+                        static DateTimeOffset? GetTime(JsonElement el, params string[] names)
+                        {
+                            foreach (var n in names)
+                            {
+                                if (el.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String)
+                                {
+                                    var s = v.GetString();
+                                    if (!string.IsNullOrWhiteSpace(s) && DateTimeOffset.TryParse(s, out var dto))
+                                        return dto;
+                                }
+                            }
+                            return null;
+                        }
+
+                        var jobId = GetString(root, "jobId") ?? Path.GetFileNameWithoutExtension(file);
+                        var folder = GetString(root, "folder", "FolderPath", "folderPath", "Folder");
+                        var note = GetString(root, "note", "Note");
+                        var filesTotal = GetInt(root, "filesTotal");
+                        var filesProcessed = GetInt(root, "filesProcessed");
+                        var facesIndexed = GetInt(root, "facesIndexed");
+                        var filesSkippedExisting = GetInt(root, "filesSkippedExisting");
+                        var filesNoteUpdated = GetInt(root, "filesNoteUpdated");
+                        var updatedAt = GetTime(root, "updatedAt", "finishedAt") ?? new DateTimeOffset(System.IO.File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
+
+                        progress.Add(new
+                        {
+                            jobId,
+                            folder,
+                            note,
+                            filesTotal,
+                            filesProcessed,
+                            facesIndexed,
+                            filesSkippedExisting,
+                            filesNoteUpdated,
+                            state = "done",
+                            updatedAt
+                        });
                     }
                     catch { /* ignore malformed done files */ }
                 }
@@ -240,7 +506,8 @@ public sealed class FastSearchController : ControllerBase
         {
             jobs = new { queued, failed, done },
             collection,
-            progress
+            progress,
+            watchFolders = FastWatchFolderStore.Load(jobDir)
         });
     }
 

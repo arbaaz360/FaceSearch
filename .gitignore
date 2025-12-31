@@ -120,4 +120,5 @@ embedder/cv2/
 *.bak
 *.swp
 .fast-jobs/
+.fast-video-faces/
 temp_dump.txt

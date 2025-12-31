@@ -108,12 +108,13 @@ public sealed class FastSearchController : ControllerBase
         public int SampleEverySeconds { get; set; } = 10;
         public bool KeyframesOnly { get; set; } = true;
         public int MaxFacesPerVideo { get; set; } = 50;
-        public int MaxFacesPerFrame { get; set; } = 3;
+        public int MaxFacesPerFrame { get; set; } = 10;
         public int MaxFrameWidth { get; set; } = 640;
-        public int MinFaceWidthPx { get; set; } = 90;
-        public double MinFaceAreaRatio { get; set; } = 0.02;
-        public double MinBlurVariance { get; set; } = 80;
+        public int MinFaceWidthPx { get; set; } = 40;
+        public double MinFaceAreaRatio { get; set; } = 0;
+        public double MinBlurVariance { get; set; } = 40;
         public double FacePadding { get; set; } = 0.25;
+        public double MaxSimilarityToExisting { get; set; } = 0.95;
         public string? OutputDirectory { get; set; }
         public bool SaveCrops { get; set; } = true;
     }
@@ -216,6 +217,7 @@ public sealed class FastSearchController : ControllerBase
             MinFaceAreaRatio: req.MinFaceAreaRatio,
             MinBlurVariance: req.MinBlurVariance,
             FacePadding: req.FacePadding,
+            MaxSimilarityToExisting: req.MaxSimilarityToExisting,
             OutputDirectory: req.OutputDirectory,
             SaveCrops: req.SaveCrops);
         var jobPath = Path.Combine(jobDir, $"job-video-{jobId}.json");

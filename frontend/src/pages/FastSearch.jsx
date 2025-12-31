@@ -37,8 +37,11 @@ function FastSearch() {
   const [videoSampleEverySeconds, setVideoSampleEverySeconds] = useState(10)
   const [videoKeyframesOnly, setVideoKeyframesOnly] = useState(true)
   const [videoMaxFacesPerVideo, setVideoMaxFacesPerVideo] = useState(50)
-  const [videoMinFaceWidthPx, setVideoMinFaceWidthPx] = useState(90)
-  const [videoMinBlurVariance, setVideoMinBlurVariance] = useState(80)
+  const [videoMaxFacesPerFrame, setVideoMaxFacesPerFrame] = useState(10)
+  const [videoMaxFrameWidth, setVideoMaxFrameWidth] = useState(640)
+  const [videoMaxSimilarityToExisting, setVideoMaxSimilarityToExisting] = useState(0.95)
+  const [videoMinFaceWidthPx, setVideoMinFaceWidthPx] = useState(40)
+  const [videoMinBlurVariance, setVideoMinBlurVariance] = useState(40)
   const [videoOutputDirectory, setVideoOutputDirectory] = useState('')
   const [videoMsg, setVideoMsg] = useState('')
 
@@ -217,11 +220,20 @@ function FastSearch() {
     const maxFaces = Number(videoMaxFacesPerVideo)
     const safeMaxFaces = Number.isFinite(maxFaces) ? Math.max(1, Math.min(Math.round(maxFaces), 10000)) : 50
 
+    const maxFacesFrame = Number(videoMaxFacesPerFrame)
+    const safeMaxFacesFrame = Number.isFinite(maxFacesFrame) ? Math.max(1, Math.min(Math.round(maxFacesFrame), 50)) : 10
+
+    const frameWidth = Number(videoMaxFrameWidth)
+    const safeFrameWidth = Number.isFinite(frameWidth) ? Math.max(160, Math.min(Math.round(frameWidth), 4096)) : 640
+
+    const maxSim = Number(videoMaxSimilarityToExisting)
+    const safeMaxSim = Number.isFinite(maxSim) ? Math.max(0, Math.min(maxSim, 1)) : 0.95
+
     const minFacePx = Number(videoMinFaceWidthPx)
-    const safeMinFacePx = Number.isFinite(minFacePx) ? Math.max(20, Math.min(Math.round(minFacePx), 2000)) : 90
+    const safeMinFacePx = Number.isFinite(minFacePx) ? Math.max(20, Math.min(Math.round(minFacePx), 2000)) : 40
 
     const minBlur = Number(videoMinBlurVariance)
-    const safeMinBlur = Number.isFinite(minBlur) ? Math.max(0, minBlur) : 80
+    const safeMinBlur = Number.isFinite(minBlur) ? Math.max(0, minBlur) : 40
 
     try {
       await fastIndexVideos({
@@ -231,8 +243,11 @@ function FastSearch() {
         sampleEverySeconds: safeSampleEvery,
         keyframesOnly: videoKeyframesOnly,
         maxFacesPerVideo: safeMaxFaces,
+        maxFacesPerFrame: safeMaxFacesFrame,
+        maxFrameWidth: safeFrameWidth,
         minFaceWidthPx: safeMinFacePx,
         minBlurVariance: safeMinBlur,
+        maxSimilarityToExisting: safeMaxSim,
         outputDirectory: videoOutputDirectory.trim() || null,
         saveCrops: true
       })
@@ -539,6 +554,28 @@ function FastSearch() {
             />
           </label>
           <label className="topk">
+            Max faces/frame:
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={videoMaxFacesPerFrame}
+              onChange={(e) => setVideoMaxFacesPerFrame(e.target.value)}
+              title="How many faces to consider per frame"
+            />
+          </label>
+          <label className="topk">
+            Frame width:
+            <input
+              type="number"
+              min="160"
+              step="160"
+              value={videoMaxFrameWidth}
+              onChange={(e) => setVideoMaxFrameWidth(e.target.value)}
+              title="Resize frames to this max width before face detection"
+            />
+          </label>
+          <label className="topk">
             Min face (px):
             <input
               type="number"
@@ -558,6 +595,18 @@ function FastSearch() {
               value={videoMinBlurVariance}
               onChange={(e) => setVideoMinBlurVariance(e.target.value)}
               title="Higher means stricter; filters blurry faces"
+            />
+          </label>
+          <label className="topk">
+            Dedup ≥
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.01"
+              value={videoMaxSimilarityToExisting}
+              onChange={(e) => setVideoMaxSimilarityToExisting(e.target.value)}
+              title="Treat faces with cosine similarity >= this value as duplicates (0 disables dedup)"
             />
           </label>
           <input

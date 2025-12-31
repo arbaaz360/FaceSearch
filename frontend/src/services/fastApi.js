@@ -34,12 +34,13 @@ export const fastIndexVideos = async ({
   sampleEverySeconds = 10,
   keyframesOnly = true,
   maxFacesPerVideo = 50,
-  maxFacesPerFrame = 3,
+  maxFacesPerFrame = 10,
   maxFrameWidth = 640,
-  minFaceWidthPx = 90,
-  minFaceAreaRatio = 0.02,
-  minBlurVariance = 80,
+  minFaceWidthPx = 40,
+  minFaceAreaRatio = 0,
+  minBlurVariance = 40,
   facePadding = 0.25,
+  maxSimilarityToExisting = 0.95,
   outputDirectory = null,
   saveCrops = true
 }) => {
@@ -56,6 +57,7 @@ export const fastIndexVideos = async ({
     minFaceAreaRatio,
     minBlurVariance,
     facePadding,
+    maxSimilarityToExisting,
     outputDirectory,
     saveCrops
   })

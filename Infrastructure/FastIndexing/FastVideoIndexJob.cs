@@ -7,12 +7,12 @@ public sealed record FastVideoIndexJob(
     int SampleEverySeconds = 10,
     bool KeyframesOnly = true,
     int MaxFacesPerVideo = 50,
-    int MaxFacesPerFrame = 3,
+    int MaxFacesPerFrame = 10,
     int MaxFrameWidth = 640,
-    int MinFaceWidthPx = 90,
-    double MinFaceAreaRatio = 0.02,
-    double MinBlurVariance = 80,
+    int MinFaceWidthPx = 40,
+    double MinFaceAreaRatio = 0,
+    double MinBlurVariance = 40,
     double FacePadding = 0.25,
+    double MaxSimilarityToExisting = 0.95,
     string? OutputDirectory = null,
     bool SaveCrops = true);
-

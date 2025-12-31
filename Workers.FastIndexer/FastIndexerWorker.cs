@@ -560,6 +560,9 @@ public sealed class FastIndexerWorker : BackgroundService
             var perVideoFaces = 0;
             var framesSeen = 0;
             var maxFacesPerVideo = Math.Clamp(job.MaxFacesPerVideo, 1, 10000);
+            var similarityThreshold = Math.Clamp(job.MaxSimilarityToExisting, -1, 1);
+            var enableDedup = similarityThreshold > 0 && similarityThreshold < 0.999;
+            var acceptedVectors = enableDedup ? new List<float[]>(capacity: Math.Min(512, maxFacesPerVideo)) : null;
 
             try
             {
@@ -586,12 +589,19 @@ public sealed class FastIndexerWorker : BackgroundService
                     using var frameBmp = new Bitmap(bmpStream);
 
                     var maxFacesPerFrame = Math.Clamp(job.MaxFacesPerFrame, 1, 50);
-                    for (var faceIndex = 0; faceIndex < faces.Count && faceIndex < maxFacesPerFrame; faceIndex++)
+                    var facesBySize = faces
+                        .Select((f, idx) => new { Face = f, Index = idx, Area = GetBboxArea(f.Bbox) })
+                        .OrderByDescending(x => x.Area)
+                        .Take(maxFacesPerFrame)
+                        .ToList();
+
+                    foreach (var item in facesBySize)
                     {
                         if (perVideoFaces >= maxFacesPerVideo)
                             break;
 
-                        var face = faces[faceIndex];
+                        var faceIndex = item.Index;
+                        var face = item.Face;
                         if (face.Vector.Length == 0 || face.Bbox is not { Length: >= 4 })
                             continue;
 
@@ -603,13 +613,33 @@ public sealed class FastIndexerWorker : BackgroundService
 
                         var frameArea = (double)frameBmp.Width * frameBmp.Height;
                         var faceAreaRatio = frameArea <= 0 ? 0 : ((double)rawWidth * rawHeight) / frameArea;
-                        if (faceAreaRatio < Math.Clamp(job.MinFaceAreaRatio, 0, 1))
+                        var minAreaRatio = Math.Clamp(job.MinFaceAreaRatio, 0, 1);
+                        if (minAreaRatio > 0 && faceAreaRatio < minAreaRatio)
                             continue;
 
                         using var faceBmp = frameBmp.Clone(paddedRect, PixelFormat.Format24bppRgb);
                         var blur = ComputeLaplacianVariance(faceBmp);
                         if (blur < Math.Max(0, job.MinBlurVariance))
                             continue;
+
+                        var normalized = enableDedup ? TryNormalizeVector(face.Vector) : null;
+                        if (enableDedup)
+                        {
+                            if (normalized == null)
+                                continue;
+
+                            var dup = false;
+                            foreach (var prev in acceptedVectors!)
+                            {
+                                if (Dot(prev, normalized) >= similarityThreshold)
+                                {
+                                    dup = true;
+                                    break;
+                                }
+                            }
+                            if (dup)
+                                continue;
+                        }
 
                         var timestampText = FormatTimestamp(frame.PtsTimeSeconds);
                         var note = string.IsNullOrWhiteSpace(job.Note)
@@ -640,6 +670,9 @@ public sealed class FastIndexerWorker : BackgroundService
                         var payload = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
                         lock (batchLock)
                         {
+                            if (enableDedup)
+                                acceptedVectors!.Add(normalized!);
+
                             batch.Add((id, face.Vector, payload));
                             mongoBatch.Add(new FastFaceMongo
                             {
@@ -702,6 +735,48 @@ public sealed class FastIndexerWorker : BackgroundService
             File.WriteAllText(dest, json);
         }
         catch { /* ignore */ }
+    }
+
+    private static int GetBboxArea(int[]? bbox)
+    {
+        if (bbox is not { Length: >= 4 })
+            return 0;
+        var w = Math.Max(0, bbox[2] - bbox[0]);
+        var h = Math.Max(0, bbox[3] - bbox[1]);
+        return w * h;
+    }
+
+    private static float[]? TryNormalizeVector(float[] vector)
+    {
+        if (vector.Length == 0)
+            return null;
+
+        double sumSq = 0;
+        for (var i = 0; i < vector.Length; i++)
+            sumSq += (double)vector[i] * vector[i];
+
+        if (sumSq <= 0)
+            return null;
+
+        var inv = 1.0 / Math.Sqrt(sumSq);
+        var normalized = new float[vector.Length];
+        for (var i = 0; i < vector.Length; i++)
+            normalized[i] = (float)(vector[i] * inv);
+
+        return normalized;
+    }
+
+    private static double Dot(float[] a, float[] b)
+    {
+        var len = a.Length;
+        if (b.Length != len)
+            len = Math.Min(len, b.Length);
+
+        double sum = 0;
+        for (var i = 0; i < len; i++)
+            sum += (double)a[i] * b[i];
+
+        return sum;
     }
 
     private static IEnumerable<string> EnumerateVideoFiles(string root, bool recursive)

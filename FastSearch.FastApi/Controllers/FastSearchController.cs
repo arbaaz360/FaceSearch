@@ -520,6 +520,126 @@ public sealed class FastSearchController : ControllerBase
         });
     }
 
+    [HttpGet("queue")]
+    public IActionResult GetQueue()
+    {
+        var jobDir = Path.GetFullPath(_optSearch.JobDirectory ?? ".fast-jobs", AppContext.BaseDirectory);
+        if (!Directory.Exists(jobDir))
+            return Ok(new { count = 0, items = Array.Empty<object>(), truncated = false });
+
+        var files = Directory.GetFiles(jobDir, "job-*.json", SearchOption.TopDirectoryOnly)
+            .Select(f => new FileInfo(f))
+            .OrderBy(f => f.LastWriteTimeUtc)
+            .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        static string? GetString(JsonElement el, params string[] names)
+        {
+            foreach (var n in names)
+            {
+                if (el.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String)
+                    return v.GetString();
+            }
+            return null;
+        }
+
+        var items = new List<object>();
+        foreach (var fi in files.Take(200))
+        {
+            string? folder = null;
+            string? note = null;
+            try
+            {
+                var json = System.IO.File.ReadAllText(fi.FullName);
+                using var doc = JsonDocument.Parse(json);
+                folder = GetString(doc.RootElement, "FolderPath", "folderPath", "folder");
+                note = GetString(doc.RootElement, "Note", "note");
+            }
+            catch
+            {
+                // ignore parse failures
+            }
+
+            var kind = fi.Name.StartsWith("job-video-", StringComparison.OrdinalIgnoreCase)
+                ? "video"
+                : fi.Name.StartsWith("job-watch-", StringComparison.OrdinalIgnoreCase)
+                    ? "watch"
+                    : "images";
+
+            items.Add(new
+            {
+                fileName = fi.Name,
+                jobId = Path.GetFileNameWithoutExtension(fi.Name),
+                kind,
+                folder,
+                note,
+                queuedAt = new DateTimeOffset(fi.LastWriteTimeUtc, TimeSpan.Zero)
+            });
+        }
+
+        return Ok(new
+        {
+            count = files.Count,
+            items,
+            truncated = files.Count > items.Count
+        });
+    }
+
+    [HttpDelete("queue")]
+    public IActionResult CancelAllQueued()
+    {
+        var jobDir = Path.GetFullPath(_optSearch.JobDirectory ?? ".fast-jobs", AppContext.BaseDirectory);
+        if (!Directory.Exists(jobDir))
+            return Ok(new { deleted = 0 });
+
+        var deleted = 0;
+        foreach (var file in Directory.GetFiles(jobDir, "job-*.json", SearchOption.TopDirectoryOnly))
+        {
+            try
+            {
+                System.IO.File.Delete(file);
+                deleted++;
+            }
+            catch
+            {
+                // ignore delete failures
+            }
+        }
+
+        return Ok(new { deleted });
+    }
+
+    [HttpDelete("queue/{fileName}")]
+    public IActionResult CancelQueued([FromRoute] string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+            return BadRequest("fileName is required");
+
+        if (fileName != Path.GetFileName(fileName))
+            return BadRequest("Invalid fileName");
+        if (!fileName.StartsWith("job-", StringComparison.OrdinalIgnoreCase) || !fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Invalid fileName");
+
+        var jobDir = Path.GetFullPath(_optSearch.JobDirectory ?? ".fast-jobs", AppContext.BaseDirectory);
+        var jobDirFull = Path.GetFullPath(jobDir);
+        var path = Path.GetFullPath(Path.Combine(jobDirFull, fileName));
+        if (!path.StartsWith(jobDirFull, StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Invalid fileName");
+
+        if (!System.IO.File.Exists(path))
+            return NotFound();
+
+        try
+        {
+            System.IO.File.Delete(path);
+            return Ok(new { message = "Canceled", fileName });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = ex.Message });
+        }
+    }
+
     // Bulk check uploaded files (supports selecting a folder in the browser if the input allows directory selection)
     [HttpPost("bulk-check-files")]
     public async Task<IActionResult> BulkCheckFiles([FromQuery] double? threshold, CancellationToken ct)

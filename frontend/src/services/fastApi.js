@@ -73,6 +73,21 @@ export const fastStatus = async () => {
   return data
 }
 
+export const fastQueue = async () => {
+  const { data } = await fastApi.get('/fast/queue')
+  return data
+}
+
+export const fastCancelQueued = async (fileName) => {
+  const { data } = await fastApi.delete(`/fast/queue/${encodeURIComponent(fileName)}`)
+  return data
+}
+
+export const fastCancelAllQueued = async () => {
+  const { data } = await fastApi.delete('/fast/queue')
+  return data
+}
+
 export const fastUpsertWatchFolder = async ({
   id = null,
   folderPath,

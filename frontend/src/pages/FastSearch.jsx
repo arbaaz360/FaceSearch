@@ -1,9 +1,12 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   fastSearchFace,
   fastIndexFolder,
   fastIndexVideos,
   fastStatus,
+  fastQueue,
+  fastCancelQueued,
+  fastCancelAllQueued,
   fastBulkCheck,
   fastUpsertWatchFolder,
   fastDeleteWatchFolder,
@@ -25,6 +28,9 @@ function FastSearch() {
   const [indexMsg, setIndexMsg] = useState('')
   const [status, setStatus] = useState(null)
   const [statusError, setStatusError] = useState(null)
+  const [queue, setQueue] = useState(null)
+  const [queueError, setQueueError] = useState(null)
+  const [queueMsg, setQueueMsg] = useState('')
   const [dragging, setDragging] = useState(false)
   const [checkFiles, setCheckFiles] = useState([])
   const [checkThreshold, setCheckThreshold] = useState(0.6)
@@ -49,6 +55,8 @@ function FastSearch() {
   const [videoMsg, setVideoMsg] = useState('')
   const [openVideoMsg, setOpenVideoMsg] = useState('')
 
+  const mountedRef = useRef(true)
+
   const formatTime = (totalSeconds) => {
     const s = Math.max(0, Math.floor(Number(totalSeconds) || 0))
     const h = Math.floor(s / 3600)
@@ -56,6 +64,30 @@ function FastSearch() {
     const sec = s % 60
     if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
     return `${m}:${String(sec).padStart(2, '0')}`
+  }
+
+  const refreshStatus = async () => {
+    try {
+      const data = await fastStatus()
+      if (mountedRef.current) {
+        setStatus(data)
+        setStatusError(null)
+      }
+    } catch (err) {
+      if (mountedRef.current) setStatusError(err?.message || 'Failed to load status')
+    }
+  }
+
+  const refreshQueue = async () => {
+    try {
+      const data = await fastQueue()
+      if (mountedRef.current) {
+        setQueue(data)
+        setQueueError(null)
+      }
+    } catch (err) {
+      if (mountedRef.current) setQueueError(err?.message || 'Failed to load queue')
+    }
   }
 
   const videoMatches = useMemo(() => {
@@ -252,6 +284,35 @@ function FastSearch() {
     }
   }
 
+  const onCancelQueued = async (fileName) => {
+    if (!fileName) return
+    setQueueMsg('')
+    try {
+      await fastCancelQueued(fileName)
+      setQueueMsg('Canceled queued job.')
+    } catch (err) {
+      setQueueMsg(err?.response?.data ?? err.message ?? 'Failed to cancel queued job')
+    } finally {
+      await refreshQueue()
+      await refreshStatus()
+    }
+  }
+
+  const onCancelAllQueued = async () => {
+    if (!window.confirm('Cancel all queued jobs?')) return
+    setQueueMsg('')
+    try {
+      const resp = await fastCancelAllQueued()
+      const deleted = resp?.deleted ?? 0
+      setQueueMsg(`Canceled ${deleted} queued job(s).`)
+    } catch (err) {
+      setQueueMsg(err?.response?.data ?? err.message ?? 'Failed to cancel queued jobs')
+    } finally {
+      await refreshQueue()
+      await refreshStatus()
+    }
+  }
+
   const onVideoIndex = async () => {
     setVideoMsg('')
     if (!videoFolderPath.trim()) {
@@ -319,22 +380,14 @@ function FastSearch() {
   }
 
   useEffect(() => {
-    let mounted = true
-    const loadStatus = async () => {
-      try {
-        const data = await fastStatus()
-        if (mounted) {
-          setStatus(data)
-          setStatusError(null)
-        }
-      } catch (err) {
-        if (mounted) setStatusError(err?.message || 'Failed to load status')
-      }
+    mountedRef.current = true
+    const tick = async () => {
+      await Promise.all([refreshStatus(), refreshQueue()])
     }
-    loadStatus()
-    const id = setInterval(loadStatus, 2000)
+    tick()
+    const id = setInterval(tick, 2000)
     return () => {
-      mounted = false
+      mountedRef.current = false
       clearInterval(id)
     }
   }, [])
@@ -493,6 +546,48 @@ function FastSearch() {
           </button>
         </div>
         {indexMsg && <div className="muted">{indexMsg}</div>}
+        {queueError && <div className="error">{queueError}</div>}
+        {queueMsg && <div className="muted">{queueMsg}</div>}
+
+        {queue?.items?.length > 0 && (
+          <div className="watch-list">
+            <div className="watch-title-row">
+              <div className="watch-title-text">Queued jobs</div>
+              <div className="muted">
+                {queue.count ?? queue.items.length}
+                {queue.truncated ? '+' : ''}
+              </div>
+            </div>
+            <div className="watch-items">
+              {queue.items.map((j) => {
+                const label = (j.note || '').trim() || (j.folder || '').split(/[\\/]/).pop() || j.jobId || '(job)'
+                const kind =
+                  j.kind === 'video' ? 'video detect' : j.kind === 'watch' ? 'watch scan' : j.kind === 'images' ? 'image index' : j.kind || 'job'
+                const when = j.queuedAt ? new Date(j.queuedAt).toLocaleTimeString() : ''
+                return (
+                  <div className="watch-item" key={j.fileName || j.jobId || label}>
+                    <div className="watch-main" title={j.folder || ''}>
+                      <div className="watch-name">{label}</div>
+                      <div className="watch-meta muted">
+                        <span className="watch-path">{j.folder || j.fileName}</span>
+                        {kind ? ` | ${kind}` : ''}
+                        {when ? ` | queued ${when}` : ''}
+                      </div>
+                    </div>
+                    <button className="danger" onClick={() => onCancelQueued(j.fileName)}>
+                      Cancel
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="fast-form">
+              <button className="danger" onClick={onCancelAllQueued}>
+                Cancel all queued
+              </button>
+            </div>
+          </div>
+        )}
 
         {status?.watchFolders?.length > 0 && (
           <div className="watch-list">

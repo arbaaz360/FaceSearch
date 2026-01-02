@@ -2,6 +2,7 @@
 setlocal
 set SCRIPT_DIR=%~dp0
 set FRONTEND_PORT=3000
+set FRONTEND_HEALTH_URL=http://localhost:%FRONTEND_PORT%/
 set FRONTEND_URL=http://localhost:%FRONTEND_PORT%/fast-search
 cd /d "%SCRIPT_DIR%"
 
@@ -50,14 +51,21 @@ timeout /t 2 /nobreak >nul
 
 REM Frontend for fast search
 echo [5/5] Starting Frontend (dev) ...
-where npm >nul 2>&1
+where npm.cmd >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] npm not found. Install Node.js (LTS) to run the frontend.
+    echo [ERROR] npm.cmd not found. Install Node.js (LTS) to run the frontend.
     goto :fail
 )
 
+if not exist "%SCRIPT_DIR%out" mkdir "%SCRIPT_DIR%out"
+set FRONTEND_LOG_OUT=%SCRIPT_DIR%out\fast-frontend.out.log
+set FRONTEND_LOG_ERR=%SCRIPT_DIR%out\fast-frontend.err.log
+del /q "%FRONTEND_LOG_OUT%" >nul 2>&1
+del /q "%FRONTEND_LOG_ERR%" >nul 2>&1
+
 REM Pick a free port starting at %FRONTEND_PORT% (avoids Vite strictPort failures)
-for /f %%P in ('powershell -NoProfile -Command "$p=%FRONTEND_PORT%; while(Test-NetConnection -ComputerName localhost -Port $p -InformationLevel Quiet){$p++}; Write-Output $p"') do set FRONTEND_PORT=%%P
+for /f %%P in ('powershell -NoProfile -Command "$p=%FRONTEND_PORT%; $ports=[System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | ForEach-Object { $_.Port }; while($ports -contains $p){$p++}; Write-Output $p"') do set FRONTEND_PORT=%%P
+set FRONTEND_HEALTH_URL=http://localhost:%FRONTEND_PORT%/
 set FRONTEND_URL=http://localhost:%FRONTEND_PORT%/fast-search
 echo [INFO] Frontend URL: %FRONTEND_URL%
 
@@ -65,17 +73,25 @@ if not exist "%SCRIPT_DIR%frontend\node_modules" (
     echo [INFO] Installing frontend dependencies (first time setup)...
     pushd "%SCRIPT_DIR%frontend"
     call npm install
+    if errorlevel 1 (
+        echo [ERROR] Failed to install frontend dependencies.
+        popd
+        goto :fail
+    )
     popd
 )
-start "Fast-Frontend" /D "%SCRIPT_DIR%frontend" cmd /k "title Fast-Frontend && npm run dev -- --host --port %FRONTEND_PORT% --strictPort"
+echo [INFO] Frontend log: %FRONTEND_LOG_OUT%
+echo [INFO] Frontend err: %FRONTEND_LOG_ERR%
+powershell -NoProfile -Command "& { $npm=(Get-Command npm.cmd -ErrorAction Stop).Source; $args=@('run','dev','--','--host','--port','%FRONTEND_PORT%','--strictPort'); Start-Process -FilePath $npm -WorkingDirectory '%SCRIPT_DIR%frontend' -ArgumentList $args -RedirectStandardOutput '%FRONTEND_LOG_OUT%' -RedirectStandardError '%FRONTEND_LOG_ERR%' -WindowStyle Normal }"
 timeout /t 2 /nobreak >nul
-echo [CHECK] Waiting for frontend (%FRONTEND_URL% )...
-powershell -NoProfile -Command "& { $u='%FRONTEND_URL%'; $deadline=(Get-Date).AddSeconds(60); while((Get-Date) -lt $deadline){ try { Invoke-RestMethod -Uri $u -TimeoutSec 5 | Out-Null; Write-Host ('[OK] Frontend responding on {0}' -f $u); exit 0 } catch { Start-Sleep -Seconds 3 } }; Write-Warning ('Frontend did not respond at {0} within 60s' -f $u); exit 1 }"
+echo [CHECK] Waiting for frontend (%FRONTEND_HEALTH_URL% )...
+powershell -NoProfile -Command "& { $u='%FRONTEND_HEALTH_URL%'; $deadline=(Get-Date).AddSeconds(60); while((Get-Date) -lt $deadline){ try { Invoke-RestMethod -Uri $u -TimeoutSec 5 | Out-Null; Write-Host ('[OK] Frontend responding on {0}' -f $u); exit 0 } catch { Start-Sleep -Seconds 3 } }; Write-Warning ('Frontend did not respond at {0} within 60s' -f $u); exit 1 }"
 if errorlevel 1 (
-    echo [ERROR] Frontend failed to start.
-    goto :fail
+    echo [WARN] Frontend health check failed. Check %FRONTEND_LOG_ERR% for errors.
+    start "" "%FRONTEND_HEALTH_URL%"
+) else (
+    start "" "%FRONTEND_URL%"
 )
-start "" "%FRONTEND_URL%"
 
 echo [OK] Fast pipeline starting. UI: %FRONTEND_URL%
 echo Press any key to close this launcher window.
